@@ -1,10 +1,3 @@
-"""
-Phase 6: Training Implementation
-=================================
-Simple, focused training code with k-fold cross-validation.
-No options - just what works best for flood prediction.
-"""
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
