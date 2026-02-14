@@ -208,10 +208,6 @@ def print_rainfall_stats(stats: Dict):
     print(f"Peak at hour:      {stats['peak_hour']:.4f}")
     print(f"{'='*60}\n")
 
-
-"""
-Visualization functions for raster data
-"""
 def visualize_raster(data: np.ndarray, 
                      title: str = "Raster Data",
                      cmap: str = 'terrain',

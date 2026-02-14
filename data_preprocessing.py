@@ -10,14 +10,9 @@ from typing import Optional, Tuple, List
 import pandas as pd
 
 
-"""
-Normalization functions for input data
-"""
+
 def normalize_dem(dem_data: np.ndarray, method: str = 'minmax') -> Tuple[np.ndarray, Dict]:
-    """
-    Normalize DEM data
-    """
-    # Filter valid data (exclude NaN and extreme values)
+    # Filter valid data
     valid_mask = ~np.isnan(dem_data) & (dem_data != -9999) & (dem_data > -1e10)
     
     if method == 'minmax':
@@ -37,27 +32,6 @@ def normalize_dem(dem_data: np.ndarray, method: str = 'minmax') -> Tuple[np.ndar
         }
         
         print(f"DEM normalized (min-max): [{dem_min:.4f}, {dem_max:.4f}] -> [0.0, 1.0]")
-        
-    elif method == 'zscore':
-        dem_mean = np.mean(dem_data[valid_mask])
-        dem_std = np.std(dem_data[valid_mask])
-        
-        dem_normalized = np.where(
-            valid_mask,
-            (dem_data - dem_mean) / dem_std,
-            np.nan
-        )
-        
-        params = {
-            'method': 'zscore',
-            'mean': float(dem_mean),
-            'std': float(dem_std)
-        }
-        
-        print(f"DEM normalized (z-score): mean={dem_mean:.4f}, std={dem_std:.4f}")
-    
-    else:
-        raise ValueError(f"Unknown normalization method: {method}")
     
     return dem_normalized, params
 
@@ -105,27 +79,8 @@ def normalize_landuse(landuse_data: np.ndarray, method: str = 'minmax') -> Tuple
             'min': float(lu_min),
             'max': float(lu_max)
         }
-        
+    
         print(f"Landuse normalized (min-max): [{lu_min:.4f}, {lu_max:.4f}] -> [0.0, 1.0]")
-        
-    elif method == 'standard':
-        # Standard scaling (useful for categorical treated as ordinal)
-        lu_mean = np.mean(landuse_data[valid_mask])
-        lu_std = np.std(landuse_data[valid_mask])
-        
-        landuse_normalized = np.where(
-            valid_mask,
-            (landuse_data - lu_mean) / lu_std,
-            np.nan
-        )
-        
-        params = {
-            'method': 'standard',
-            'mean': float(lu_mean),
-            'std': float(lu_std)
-        }
-        
-        print(f"Landuse normalized (standard): mean={lu_mean:.4f}, std={lu_std:.4f}")
     
     else:
         raise ValueError(f"Unknown normalization method: {method}")
@@ -133,41 +88,6 @@ def normalize_landuse(landuse_data: np.ndarray, method: str = 'minmax') -> Tuple
     return landuse_normalized, params
 
 
-def denormalize_dem(dem_normalized: np.ndarray, params: Dict) -> np.ndarray:
-    """
-    Denormalize DEM back to original scale
-    """
-    if params['method'] == 'minmax':
-        return dem_normalized * (params['max'] - params['min']) + params['min']
-    elif params['method'] == 'zscore':
-        return dem_normalized * params['std'] + params['mean']
-    else:
-        raise ValueError(f"Unknown method: {params['method']}")
-
-
-def denormalize_infiltration(infilt_normalized: np.ndarray, params: Dict) -> np.ndarray:
-    """
-    Denormalize infiltration back to original scale
-    """
-    return infilt_normalized * (params['max'] - params['min']) + params['min']
-
-
-def denormalize_landuse(landuse_normalized: np.ndarray, params: Dict) -> np.ndarray:
-    """
-    Denormalize landuse back to original scale
-    """
-    if params['method'] == 'minmax':
-        return landuse_normalized * (params['max'] - params['min']) + params['min']
-    elif params['method'] == 'standard':
-        return landuse_normalized * params['std'] + params['mean']
-    else:
-        raise ValueError(f"Unknown method: {params['method']}")
-    
-
-
-"""
-NoData Handling function
-"""
 def handle_nodata(data: np.ndarray, nodata_value: Optional[float] = None, fill_method: str = 'mean', name: str = "Raster") -> np.ndarray:
     print(f"\nHandling NoData for {name}...")
     
@@ -205,15 +125,6 @@ def handle_nodata(data: np.ndarray, nodata_value: Optional[float] = None, fill_m
         data_copy = np.nan_to_num(data_copy, nan=fill_value)
         print(f"  ✓ Filled with mean: {fill_value:.4f}")
         
-    elif fill_method == 'median':
-        fill_value = np.nanmedian(data_copy)
-        data_copy = np.nan_to_num(data_copy, nan=fill_value)
-        print(f"  ✓ Filled with median: {fill_value:.4f}")
-        
-    elif fill_method == 'zero':
-        data_copy = np.nan_to_num(data_copy, nan=0.0)
-        print(f"  ✓ Filled with zero")
-        
     elif fill_method == 'interpolate':
         # Nearest neighbor interpolation using scipy
         try:
@@ -234,10 +145,6 @@ def handle_nodata(data: np.ndarray, nodata_value: Optional[float] = None, fill_m
             fill_value = np.nanmean(data_copy)
             data_copy = np.nan_to_num(data_copy, nan=fill_value)
             print(f"  ✓ Filled with mean: {fill_value:.4f}")
-    
-    elif fill_method == 'remove':
-        print(f"  ✓ NoData values kept as NaN (not filled)")
-        # Keep as NaN
     
     else:
         raise ValueError(f"Unknown fill method: {fill_method}")

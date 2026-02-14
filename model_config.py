@@ -1,10 +1,3 @@
-"""
-Model Configuration for ViT with Temporal Rainfall Sequences
-=============================================================
-
-UPDATED: Now supports 13-timestep rainfall sequences instead of scalar values
-"""
-
 import torch
 import torch.nn as nn
 from typing import Dict, Any
@@ -16,10 +9,10 @@ DATASET_INFO = {
     'num_train_scenarios': 15,
     'num_test_scenarios': 5,
     'patches_per_scenario': 6_400,
-    'patch_size': 4,  # 4x4 patches
-    'input_channels': 3,  # DEM, Infiltration, Landuse
-    'num_classes': 5,  # Flood categories: 0-4
-    'rainfall_timesteps': 13  # NEW: Temporal rainfall sequence length
+    'patch_size': 4,  
+    'input_channels': 3,  
+    'num_classes': 5,  
+    'rainfall_timesteps': 13  
 }
 
 # Configuration 1: TINY (For quick experiments and debugging)
@@ -31,7 +24,7 @@ CONFIG_TINY = {
     'num_heads': 4,
     'mlp_ratio': 4.0,
     'dropout': 0.1,
-    'rainfall_method': 'conv',  # NEW: 'conv', 'mlp', or 'attention'
+    'rainfall_method': 'conv', 
     'description': 'Fast training, good for debugging',
     'expected_params': '~500K',
     'use_case': 'Quick experiments, debugging, baseline'
@@ -46,7 +39,7 @@ CONFIG_SMALL = {
     'num_heads': 8,
     'mlp_ratio': 4.0,
     'dropout': 0.1,
-    'rainfall_method': 'conv',  # NEW: Recommended for temporal patterns
+    'rainfall_method': 'conv', 
     'description': 'Good balance for 96K samples with temporal rainfall',
     'expected_params': '~3M',
     'use_case': 'Main experiments, good starting point'

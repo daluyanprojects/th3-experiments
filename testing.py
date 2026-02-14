@@ -18,12 +18,10 @@ def reconstruct_test_map_from_patches(
     original_shape: Tuple[int, int] = (320, 320),
     patch_size: int = 4
 ) -> np.ndarray:
-    """
-    Reconstruct full 320×320 map from 6400 patch predictions.
-    """
+    
     H, W = original_shape
-    patches_h = H // patch_size  # 80
-    patches_w = W // patch_size  # 80
+    patches_h = H // patch_size  
+    patches_w = W // patch_size 
     
     # Reshape from flat (6400,) to grid (80, 80)
     patch_grid = patch_predictions.reshape(patches_h, patches_w)
@@ -38,15 +36,7 @@ def reconstruct_test_map_from_patches(
 # 7.2 SCENARIO-LEVEL PREDICTION
 # =============================================================================
 
-def predict_scenario(
-    model: nn.Module,
-    scenario_dataset,
-    scenario_idx: int,
-    device: str = 'cuda'
-) -> np.ndarray:
-    """
-    Predict all patches for one scenario.
-    """
+def predict_scenario(model: nn.Module, scenario_dataset, scenario_idx: int, device: str) -> np.ndarray:
     model.eval()
     
     patches_per_scenario = 6400
@@ -76,14 +66,7 @@ def predict_scenario(
 # 7.3 EVALUATION METRICS
 # =============================================================================
 
-def calculate_iou_per_class(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    num_classes: int = 5
-) -> Dict[int, float]:
-    """
-    Calculate IoU (Intersection over Union) for each class.
-    """
+def calculate_iou_per_class(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int = 5) -> Dict[int, float]:
     iou_scores = {}
     
     for class_id in range(num_classes):
@@ -104,14 +87,8 @@ def calculate_iou_per_class(
     return iou_scores
 
 
-def calculate_scenario_metrics(
-    ground_truth_map: np.ndarray,
-    predicted_map: np.ndarray,
-    num_classes: int = 5
-) -> Dict:
-    """
-    Calculate comprehensive metrics for one scenario.
-    """
+def calculate_scenario_metrics(ground_truth_map: np.ndarray, predicted_map: np.ndarray, num_classes: int = 5) -> Dict:
+
     # Flatten for sklearn metrics
     y_true = ground_truth_map.flatten()
     y_pred = predicted_map.flatten()
@@ -151,17 +128,7 @@ def calculate_scenario_metrics(
 # 7.4 EVALUATE ALL TEST SCENARIOS
 # =============================================================================
 
-def evaluate_test_scenarios(
-    model: nn.Module,
-    test_dataset,
-    test_scenario_ids: List[int],
-    ground_truth_maps: Dict[int, np.ndarray],
-    device: str = 'cuda',
-    save_dir: str = './results'
-) -> Dict:
-    """
-    Evaluate model on all test scenarios.
-    """
+def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: List[int], ground_truth_maps: Dict[int, np.ndarray], device: str, save_dir: str) -> Dict:
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
@@ -228,12 +195,7 @@ def evaluate_test_scenarios(
 # 7.5 VISUALIZATION: Confusion Matrix
 # =============================================================================
 
-def plot_confusion_matrix(
-    metrics: Dict,
-    scenario_id: int,
-    save_path: str = None
-):
-    """Plot confusion matrix for one scenario."""
+def plot_confusion_matrix(metrics: Dict, scenario_id: int, save_path: str = None):
     cm = np.array(metrics['confusion_matrix'])
     
     plt.figure(figsize=(8, 6))
@@ -262,21 +224,7 @@ def plot_confusion_matrix(
 # 7.6 VISUALIZATION: Ground Truth vs Prediction
 # =============================================================================
 
-def plot_scenario_comparison(
-    scenario_id: int,
-    ground_truth_map: np.ndarray,
-    predicted_map: np.ndarray,
-    save_path: str = None
-):
-    """
-    Side-by-side comparison of ground truth vs prediction.
-    
-    Args:
-        scenario_id: Scenario ID
-        ground_truth_map: (320, 320) ground truth
-        predicted_map: (320, 320) predictions
-        save_path: Path to save figure
-    """
+def plot_scenario_comparison(scenario_id: int, ground_truth_map: np.ndarray, predicted_map: np.ndarray, save_path: str = None):
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     
     # Ground truth

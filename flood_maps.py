@@ -1,14 +1,9 @@
 import numpy as np
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Optional
 from pathlib import Path
 import matplotlib.pyplot as plt
-import numpy as np
-from typing import Optional, Tuple, List
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import matplotlib.patches as mpatches
-import json
-
-PATCH_SIZE = 16
     
 FLOOD_CLASSES = {
     0: {
@@ -39,9 +34,6 @@ FLOOD_CLASSES = {
 }
 
 def categorize_flood_map(flood_map: np.ndarray, class_ranges: Optional[Dict] = None) -> np.ndarray:
-    """
-    Categorize continuous flood depth values into discrete susceptibility classes
-    """
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
     
@@ -65,9 +57,6 @@ def categorize_flood_map(flood_map: np.ndarray, class_ranges: Optional[Dict] = N
     return categorized
 
 def categorize_all_flood_maps(flood_maps: List[np.ndarray], class_ranges: Optional[Dict] = None, verbose: bool = True) -> List[np.ndarray]:
-    """
-    Categorize all flood maps in the list
-    """
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
     
@@ -103,16 +92,8 @@ def categorize_all_flood_maps(flood_maps: List[np.ndarray], class_ranges: Option
     
     return categorized_maps
 
-def visualize_all_categorized_maps(categorized_maps: List[np.ndarray],
-                                   scenario_ids: Optional[List[int]] = None,
-                                   figsize: Tuple[int, int] = (25, 20),
-                                   ncols: int = 5) -> plt.Figure:
-    """
-    Visualize all categorized flood maps in a grid
-    """
-    from matplotlib.colors import ListedColormap, BoundaryNorm
-    import matplotlib.patches as mpatches
-    
+def visualize_all_categorized_maps(categorized_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None,
+                                    figsize: Tuple[int, int] = (25, 20), ncols: int = 5) -> plt.Figure:
     n_maps = len(categorized_maps)
     nrows = (n_maps + ncols - 1) // ncols
     
@@ -159,21 +140,7 @@ def visualize_all_categorized_maps(categorized_maps: List[np.ndarray],
     
     return fig
 
-
-def extract_patches_from_map(map_data: np.ndarray, 
-                             patch_size: int,
-                             stride: Optional[int] = None) -> np.ndarray:
-    """
-    Extract non-overlapping or overlapping patches from a 2D map
-    
-    Args:
-        map_data: 2D array (H, W)
-        patch_size: Size of square patches
-        stride: Stride for patch extraction. If None, uses patch_size (non-overlapping)
-    
-    Returns:
-        Array of patches with shape (num_patches, patch_size, patch_size)
-    """
+def extract_patches_from_map(map_data: np.ndarray, patch_size: int, stride: Optional[int] = None) -> np.ndarray:
     if stride is None:
         stride = patch_size
     
@@ -218,24 +185,21 @@ def categorize_patch_majority_vote(patch: np.ndarray) -> int:
     
     return int(majority_class)
 
-def categorize_flood_map_patch_based(flood_map: np.ndarray,
-                                     patch_size: int,
-                                     stride: Optional[int] = None,
-                                     categorization_method: str = 'majority',
-                                     class_ranges: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
+def categorize_flood_map_patch_based(flood_map: np.ndarray, patch_size: int, stride: Optional[int] = None,
+                                     categorization_method: str = 'majority', class_ranges: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
     
     if stride is None:
         stride = patch_size
     
-    # Step 1: Categorize full map (pixel-wise)
+    # Categorize full map (pixel-wise)
     categorized_map = categorize_flood_map(flood_map, class_ranges)
     
-    # Step 2: Extract patches from categorized map
+    # Extract patches from categorized map
     patches = extract_patches_from_map(categorized_map, patch_size, stride)
     
-    # Step 3: Categorize each patch
+    # Categorize each patch
     patch_labels = []
     
     if categorization_method == 'majority':
@@ -264,11 +228,8 @@ def categorize_flood_map_patch_based(flood_map: np.ndarray,
     
     return patch_labels, metadata
 
-def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: int,
-                                    stride: Optional[int] = None,
-                                    categorization_method: str = 'majority',
-                                    class_ranges: Optional[Dict] = None,
-                                    verbose: bool = True) -> Tuple[List[np.ndarray], List[Dict]]:
+def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: int, stride: Optional[int] = None, categorization_method: str = 'majority',
+                                    class_ranges: Optional[Dict] = None, verbose: bool = True) -> Tuple[List[np.ndarray], List[Dict]]:
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
     
@@ -287,6 +248,7 @@ def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: in
         print(f"  Stride: {stride} ({'non-overlapping' if stride == patch_size else 'overlapping'})")
         print(f"  Categorization method: {categorization_method}")
         print(f"\nClass definitions:")
+        
         for class_id, info in FLOOD_CLASSES.items():
             min_val, max_val = info['range']
             max_str = f"{max_val:.2f}" if max_val != float('inf') else "∞"
@@ -324,9 +286,6 @@ def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: in
     return categorized_patches_list, metadata_list
 
 def reconstruct_map_from_patches(patch_labels: np.ndarray, metadata: Dict, method: str = 'nearest') -> np.ndarray:
-    """
-    Reconstruct a full categorized map from patch labels
-    """
     h, w = metadata['original_shape']
     patch_size = metadata['patch_size']
     stride = metadata['stride']
@@ -349,34 +308,10 @@ def reconstruct_map_from_patches(patch_labels: np.ndarray, metadata: Dict, metho
                 # Assign patch label to entire patch region
                 reconstructed[row_start:row_end, col_start:col_end] = patch_labels[patch_idx]
                 patch_idx += 1
-    
-    elif method == 'voting':
-        # If overlapping patches, use voting
-        vote_count = np.zeros((h, w, 5), dtype=np.int32)  # 5 classes
-        
-        patch_idx = 0
-        for i in range(num_patches_h):
-            for j in range(num_patches_w):
-                row_start = i * stride
-                col_start = j * stride
-                row_end = min(row_start + patch_size, h)
-                col_end = min(col_start + patch_size, w)
-                
-                label = patch_labels[patch_idx]
-                if label >= 0:  # Ignore NoData
-                    vote_count[row_start:row_end, col_start:col_end, label] += 1
-                
-                patch_idx += 1
-        
-        # Take majority vote per pixel
-        reconstructed = np.argmax(vote_count, axis=2).astype(np.int8)
-    
+
     return reconstructed
 
-def visualize_all_reconstructed_maps(reconstructed_maps: List[np.ndarray],
-                                     scenario_ids: Optional[List[int]] = None,
-                                     figsize: Tuple[int, int] = (25, 20),
-                                     ncols: int = 5) -> plt.Figure:
+def visualize_all_reconstructed_maps(reconstructed_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None, figsize: Tuple[int, int] = (25, 20), ncols: int = 5) -> plt.Figure:
 
     n_maps = len(reconstructed_maps)
     nrows = (n_maps + ncols - 1) // ncols
@@ -388,8 +323,6 @@ def visualize_all_reconstructed_maps(reconstructed_maps: List[np.ndarray],
     axes = axes.flatten()
     
     # Create custom colormap
-    colors = [FLOOD_CLASSES[i]['color'] for i in range(5)]
-    cmap = ListedColormap(colors)
     bounds = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = BoundaryNorm(bounds, cmap.N)
     
