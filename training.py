@@ -36,7 +36,7 @@ class CombinedLoss(nn.Module):
     def forward(self, pred, target):
         ce_loss = self.ce(pred, target)
         dice_loss = self.dice_loss(pred, target)
-        return 0.7 * ce_loss + 0.3 * dice_loss
+        return 0.9 * ce_loss + 0.1 * dice_loss
 
 
 # =============================================================================
