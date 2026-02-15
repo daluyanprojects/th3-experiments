@@ -114,10 +114,28 @@ def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.nda
     return flood_maps, flood_metadata
 
 
+
+def manila_path_shape_load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
+    flood_maps = []
+    flood_metadata = []
+    
+    for i in range(1, num_scenarios + 1):
+        file_path = os.path.join(flood_dir, f"RS{i}_GM30COP_Manila_box.tif")
+        
+        if not os.path.exists(file_path):
+            print(f"Warning: {file_path} not found, skipping...")
+            continue
+            
+        flood_data, metadata = load_flood_map(file_path, scenario_id=i)
+        flood_maps.append(flood_data)
+        flood_metadata.append(metadata)
+    
+    print(f"\nTotal flood maps loaded: {len(flood_maps)}")
+    return flood_maps, flood_metadata
+
+
+
 def get_raster_stats(data: np.ndarray, name: str = "Raster") -> Dict:
-    """
-    Calculate basic statistics for a raster array
-    """
     # Filter out nodata values 
     valid_data = data[~np.isnan(data)]
     valid_data = valid_data[valid_data != -9999]
@@ -216,9 +234,6 @@ def visualize_raster(data: np.ndarray,
                      vmax: Optional[float] = None,
                      show_colorbar: bool = True,
                      auto_crop: bool = False) -> plt.Figure:
-    """
-    Visualize raster data with optional automatic cropping to remove white background.
-    """
     fig, ax = plt.subplots(figsize=figsize)
     
     # Handle nodata values
@@ -258,15 +273,9 @@ def visualize_raster(data: np.ndarray,
     plt.tight_layout()
     return fig
 
-def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
-                              scenario_ids: Optional[List[int]] = None,
-                              figsize: Tuple[int, int] = (25, 20),
-                              ncols: int = 5,
-                              cmap: str = 'Blues',
-                              auto_crop: bool = False) -> plt.Figure:
-    """
-    Visualize all flood maps in a grid
-    """
+def visualize_flood_maps_grid(flood_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None, figsize: Tuple[int, int] = (25, 20),
+                              ncols: int = 5, cmap: str = 'Blues', auto_crop: bool = False) -> plt.Figure:
+
     n_maps = len(flood_maps)
     nrows = (n_maps + ncols - 1) // ncols
     
@@ -326,12 +335,7 @@ def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
     plt.tight_layout()
     return fig
 
-def visualize_all_rainfall_scenarios(scenarios: List[pd.DataFrame],
-                                     figsize: Tuple[int, int] = (20, 15),
-                                     ncols: int = 4) -> plt.Figure:
-    """
-    Visualize all rainfall scenarios in a grid
-    """
+def visualize_all_rainfall_scenarios(scenarios: List[pd.DataFrame], figsize: Tuple[int, int] = (20, 15), ncols: int = 4) -> plt.Figure:
     n_scenarios = len(scenarios)
     nrows = (n_scenarios + ncols - 1) // ncols
     
