@@ -164,15 +164,6 @@ def extract_patches_from_map(map_data: np.ndarray, patch_size: int, stride: Opti
     return np.array(patches)
 
 def categorize_patch_majority_vote(patch: np.ndarray) -> int:
-    """
-    Categorize a patch using majority voting
-    
-    Args:
-        patch: 2D patch array with categorical values
-    
-    Returns:
-        Most frequent class in the patch (excluding NoData=-1)
-    """
     # Filter out NoData values (-1)
     valid_pixels = patch[patch >= 0]
     

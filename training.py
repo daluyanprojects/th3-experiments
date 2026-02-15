@@ -11,11 +11,6 @@ from collections import defaultdict
 from imblearn.over_sampling import SMOTE
 from sklearn.utils.class_weight import compute_class_weight
 
-
-# =============================================================================
-# 6.1 LOSS FUNCTION: Combined CE + Dice
-# =============================================================================
-
 class CombinedLoss(nn.Module):    
     def __init__(self, class_weights=None):
         super().__init__()
@@ -38,29 +33,15 @@ class CombinedLoss(nn.Module):
         dice_loss = self.dice_loss(pred, target)
         return 0.9 * ce_loss + 0.1 * dice_loss
 
-
-# =============================================================================
-# 6.2 CLASS WEIGHTING: Handle Imbalance with SMOTE + Class Weights
-# =============================================================================
-
 def calculate_class_weights(labels: np.ndarray) -> torch.Tensor:
     """Calculate balanced class weights"""
     classes = np.unique(labels)
     weights = compute_class_weight('balanced', classes=classes, y=labels)
     return torch.FloatTensor(weights)
 
-
-# =============================================================================
-# 6.3 OPTIMIZER
-# =============================================================================
-
 def create_optimizer(model: nn.Module) -> optim.Optimizer:
     return optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.05, betas=(0.9, 0.999))
 
-
-# =============================================================================
-# 6.4 LEARNING RATE SCHEDULE
-# =============================================================================
 
 class WarmupCosineScheduler:
     def __init__(self, optimizer, warmup_epochs: int, total_epochs: int):
@@ -85,10 +66,6 @@ class WarmupCosineScheduler:
         return lr
 
 
-# =============================================================================
-# 6.5 TRAINING UTILITIES
-# =============================================================================
-
 class EarlyStopping:
     def __init__(self, patience: int = 20):
         self.patience = patience
@@ -111,10 +88,6 @@ def clip_gradients(model: nn.Module, max_norm: float = 1.0):
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
 
-# =============================================================================
-# 6.6 K-FOLD
-# =============================================================================
-
 def create_kfold_splits(scenario_ids: List[int], num_folds: int) -> List[Tuple[List[int], List[int]]]:
     np.random.seed(42)
     shuffled_ids = np.array(scenario_ids.copy())
@@ -132,10 +105,6 @@ def create_kfold_splits(scenario_ids: List[int], num_folds: int) -> List[Tuple[L
     
     return folds
 
-
-# =============================================================================
-# TRAINING LOOP
-# =============================================================================
 
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -246,10 +215,6 @@ def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: i
     model.load_state_dict(best_model_state)
     return history, best_val_loss
 
-
-# =============================================================================
-# MAIN K-FOLD FUNCTION
-# =============================================================================
 
 def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size=64, num_epochs=100, device='cuda', num_folds=3):
     scenario_ids = list(scenario_to_samples.keys())

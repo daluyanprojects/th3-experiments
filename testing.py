@@ -32,10 +32,6 @@ def reconstruct_test_map_from_patches(
     return reconstructed_map
 
 
-# =============================================================================
-# 7.2 SCENARIO-LEVEL PREDICTION
-# =============================================================================
-
 def predict_scenario(model: nn.Module, scenario_dataset, scenario_idx: int, device: str) -> np.ndarray:
     model.eval()
     
@@ -61,10 +57,6 @@ def predict_scenario(model: nn.Module, scenario_dataset, scenario_idx: int, devi
     
     return np.array(patch_predictions)
 
-
-# =============================================================================
-# 7.3 EVALUATION METRICS
-# =============================================================================
 
 def calculate_iou_per_class(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int = 5) -> Dict[int, float]:
     iou_scores = {}
@@ -122,11 +114,6 @@ def calculate_scenario_metrics(ground_truth_map: np.ndarray, predicted_map: np.n
     }
     
     return metrics
-
-
-# =============================================================================
-# 7.4 EVALUATE ALL TEST SCENARIOS
-# =============================================================================
 
 def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: List[int], ground_truth_maps: Dict[int, np.ndarray], device: str, save_dir: str) -> Dict:
     save_dir = Path(save_dir)
@@ -191,10 +178,6 @@ def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: L
     return all_results, all_predictions
 
 
-# =============================================================================
-# 7.5 VISUALIZATION: Confusion Matrix
-# =============================================================================
-
 def plot_confusion_matrix(metrics: Dict, scenario_id: int, save_path: str = None):
     cm = np.array(metrics['confusion_matrix'])
     
@@ -218,11 +201,6 @@ def plot_confusion_matrix(metrics: Dict, scenario_id: int, save_path: str = None
         print(f"Confusion matrix saved to {save_path}")
     
     plt.show()
-
-
-# =============================================================================
-# 7.6 VISUALIZATION: Ground Truth vs Prediction
-# =============================================================================
 
 def plot_scenario_comparison(scenario_id: int, ground_truth_map: np.ndarray, predicted_map: np.ndarray, save_path: str = None):
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))

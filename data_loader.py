@@ -115,9 +115,6 @@ def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.nda
 
 
 def get_raster_stats(data: np.ndarray, name: str = "Raster") -> Dict:
-    """
-    Calculate basic statistics for a raster array
-    """
     # Filter out nodata values 
     valid_data = data[~np.isnan(data)]
     valid_data = valid_data[valid_data != -9999]
@@ -216,9 +213,7 @@ def visualize_raster(data: np.ndarray,
                      vmax: Optional[float] = None,
                      show_colorbar: bool = True,
                      auto_crop: bool = False) -> plt.Figure:
-    """
-    Visualize raster data with optional automatic cropping to remove white background.
-    """
+
     fig, ax = plt.subplots(figsize=figsize)
     
     # Handle nodata values
@@ -264,9 +259,7 @@ def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
                               ncols: int = 5,
                               cmap: str = 'Blues',
                               auto_crop: bool = False) -> plt.Figure:
-    """
-    Visualize all flood maps in a grid
-    """
+
     n_maps = len(flood_maps)
     nrows = (n_maps + ncols - 1) // ncols
     
@@ -329,9 +322,7 @@ def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
 def visualize_all_rainfall_scenarios(scenarios: List[pd.DataFrame],
                                      figsize: Tuple[int, int] = (20, 15),
                                      ncols: int = 4) -> plt.Figure:
-    """
-    Visualize all rainfall scenarios in a grid
-    """
+
     n_scenarios = len(scenarios)
     nrows = (n_scenarios + ncols - 1) // ncols
     
