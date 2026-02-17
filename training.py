@@ -12,7 +12,7 @@ from imblearn.over_sampling import SMOTE
 from sklearn.utils.class_weight import compute_class_weight
 
 class CombinedLoss(nn.Module):    
-    def __init__(self, class_weights=None):
+    def __init__(self, class_weights):
         super().__init__()
         self.ce = nn.CrossEntropyLoss(weight=class_weights)
         self.smooth = 1.0
@@ -34,7 +34,6 @@ class CombinedLoss(nn.Module):
         return 0.9 * ce_loss + 0.1 * dice_loss
 
 def calculate_class_weights(labels: np.ndarray) -> torch.Tensor:
-    """Calculate balanced class weights"""
     classes = np.unique(labels)
     weights = compute_class_weight('balanced', classes=classes, y=labels)
     return torch.FloatTensor(weights)
@@ -67,7 +66,7 @@ class WarmupCosineScheduler:
 
 
 class EarlyStopping:
-    def __init__(self, patience: int = 20):
+    def __init__(self, patience: int):
         self.patience = patience
         self.counter = 0
         self.best_loss = float('inf')
@@ -84,7 +83,7 @@ class EarlyStopping:
         return self.should_stop
 
 
-def clip_gradients(model: nn.Module, max_norm: float = 1.0):
+def clip_gradients(model: nn.Module, max_norm: float):
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
 
@@ -171,6 +170,7 @@ def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: i
         train_labels = np.array([train_dataset[i][2].item() for i in range(len(train_dataset))])
     
     class_weights = calculate_class_weights(train_labels).to(device)
+    
     print(f"\nClass distribution:")
     for i in range(5):
         count = (train_labels == i).sum()

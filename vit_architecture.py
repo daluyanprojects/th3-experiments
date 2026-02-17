@@ -5,15 +5,8 @@ from typing import Optional, Tuple
 import math
 
 class RainfallSequenceEmbedding(nn.Module):
-    def __init__(
-        self, 
-        num_timesteps: int,
-        embed_dim: int, 
-        hidden_dim: int,
-        method: str 
-    ):
+    def __init__(self, num_timesteps: int, embed_dim: int, hidden_dim: int, method: str):
         super().__init__()
-        
         self.num_timesteps = num_timesteps
         self.embed_dim = embed_dim
         self.method = method
@@ -223,14 +216,14 @@ class ClassificationHead(nn.Module):
 class ViTFloodClassifier(nn.Module):
     def __init__(
         self,
-        in_channels: int = 3,
-        patch_size: int = 4,
-        num_classes: int = 5,
-        embed_dim: int = 256,
-        num_layers: int = 6,
-        num_heads: int = 8,
-        mlp_ratio: float = 4.0,
-        dropout: float = 0.1,
+        in_channels: int,
+        patch_size: int,
+        num_classes: int,
+        embed_dim: int,
+        num_layers: int,
+        num_heads: int,
+        mlp_ratio: float,
+        dropout: float,
         use_cls_token: bool = False,
         learnable_pos_enc: bool = True,
         rainfall_method: str = 'conv', 
@@ -244,14 +237,14 @@ class ViTFloodClassifier(nn.Module):
         self.use_cls_token = use_cls_token
         self.num_timesteps = num_timesteps
         
-        # Patch embedding (unchanged)
+        # Patch embedding
         self.patch_embedding = PatchEmbedding(
             in_channels=in_channels,
             patch_size=patch_size,
             embed_dim=embed_dim
         )
         
-        # UPDATED: Rainfall sequence embedding
+        # Rainfall sequence embedding
         self.rainfall_embedding = RainfallSequenceEmbedding(
             num_timesteps=num_timesteps,
             embed_dim=embed_dim,
@@ -267,7 +260,7 @@ class ViTFloodClassifier(nn.Module):
             learnable=learnable_pos_enc
         )
         
-        # Transformer encoder (unchanged)
+        # Transformer encoder
         self.transformer = TransformerEncoder(
             num_layers=num_layers,
             embed_dim=embed_dim,
@@ -276,7 +269,7 @@ class ViTFloodClassifier(nn.Module):
             dropout=dropout
         )
         
-        # Classification head (unchanged)
+        # Classification head 
         self.classifier = ClassificationHead(
             embed_dim=embed_dim,
             num_classes=num_classes,
@@ -299,44 +292,28 @@ class ViTFloodClassifier(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
     
-    def forward(
-        self,
-        spatial_patch: torch.Tensor,
-        rainfall_sequence: torch.Tensor,  
-        return_attention: bool = False
-    ) -> Tuple[torch.Tensor, Optional[list]]:
-       
-        batch_size = spatial_patch.shape[0]
-        
+    def forward(self, spatial_patch: torch.Tensor, rainfall_sequence: torch.Tensor, return_attention: bool = False) -> Tuple[torch.Tensor, Optional[list]]:        
         # 1. Embed spatial patch
         patch_tokens = self.patch_embedding(spatial_patch)  # (batch, 1, embed_dim)
-        
         # 2. Embed rainfall sequence
         rainfall_tokens = self.rainfall_embedding(rainfall_sequence)  # (batch, 1, embed_dim)
-        
         # 3. Concatenate tokens: [rainfall_token, patch_token]
         tokens = torch.cat([rainfall_tokens, patch_tokens], dim=1)  # (batch, 2, embed_dim)
-        
         # 4. Add positional encoding
         tokens = self.pos_encoding(tokens)  # (batch, 2, embed_dim)
-        
         # 5. Pass through transformer
         encoded, attention_maps = self.transformer(tokens, return_attention=return_attention)
-        
         # 6. Classification
         logits = self.classifier(encoded)  # (batch, num_classes)
-        
         if return_attention:
             return logits, attention_maps
         else:
             return logits, None
 
-
 def count_parameters(model: nn.Module) -> Tuple[int, int]:
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
-
 
 def get_model_summary(model: nn.Module) -> str:
     total, trainable = count_parameters(model)

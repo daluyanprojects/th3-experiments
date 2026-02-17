@@ -127,15 +127,11 @@ def visualize_all_categorized_maps(categorized_maps: List[np.ndarray], scenario_
     # Add global legend
     patches = []
     for class_id, info in FLOOD_CLASSES.items():
-        patch = mpatches.Patch(color=info['color'], 
-                              label=f"{class_id}: {info['name']}")
+        patch = mpatches.Patch(color=info['color'], label=f"{class_id}: {info['name']}")
         patches.append(patch)
     
-    fig.legend(handles=patches, loc='center', bbox_to_anchor=(0.5, 0.02),
-              ncol=5, fontsize=12, frameon=True, fancybox=True)
-    
-    fig.suptitle('Categorized Flood Maps - All Scenarios', 
-                fontsize=16, fontweight='bold', y=0.995)
+    fig.legend(handles=patches, loc='center', bbox_to_anchor=(0.5, 0.02), ncol=5, fontsize=12, frameon=True, fancybox=True)
+    fig.suptitle('Categorized Flood Maps - All Scenarios', fontsize=16, fontweight='bold', y=0.995)
     plt.tight_layout(rect=[0, 0.03, 1, 0.99])
     
     return fig
@@ -247,14 +243,7 @@ def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: in
         print()
     
     for idx, flood_map in enumerate(flood_maps):
-        patch_labels, metadata = categorize_flood_map_patch_based(
-            flood_map,
-            patch_size=patch_size,
-            stride=stride,
-            categorization_method=categorization_method,
-            class_ranges=class_ranges
-        )
-        
+        patch_labels, metadata = categorize_flood_map_patch_based(flood_map, patch_size=patch_size, stride=stride, categorization_method=categorization_method, class_ranges=class_ranges)
         categorized_patches_list.append(patch_labels)
         metadata_list.append(metadata)
         
@@ -287,7 +276,6 @@ def reconstruct_map_from_patches(patch_labels: np.ndarray, metadata: Dict, metho
     reconstructed = np.zeros((h, w), dtype=np.int8)
     
     if method == 'nearest':
-        # Simple nearest neighbor: assign patch label to center of each patch
         patch_idx = 0
         for i in range(num_patches_h):
             for j in range(num_patches_w):
@@ -301,49 +289,3 @@ def reconstruct_map_from_patches(patch_labels: np.ndarray, metadata: Dict, metho
                 patch_idx += 1
 
     return reconstructed
-
-def visualize_all_reconstructed_maps(reconstructed_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None, figsize: Tuple[int, int] = (25, 20), ncols: int = 5) -> plt.Figure:
-
-    n_maps = len(reconstructed_maps)
-    nrows = (n_maps + ncols - 1) // ncols
-    
-    if scenario_ids is None:
-        scenario_ids = list(range(1, n_maps + 1))
-    
-    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
-    axes = axes.flatten()
-    
-    # Create custom colormap
-    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
-    norm = BoundaryNorm(bounds, cmap.N)
-    
-    for idx, (cat_map, scenario_id) in enumerate(zip(reconstructed_maps, scenario_ids)):
-        ax = axes[idx]
-        
-        # Mask NoData
-        plot_data = np.ma.masked_where(cat_map < 0, cat_map)
-        
-        # Plot
-        im = ax.imshow(plot_data, cmap=cmap, norm=norm, interpolation='nearest')
-        ax.set_title(f'RS{scenario_id}', fontsize=10, fontweight='bold')
-        ax.axis('off')
-    
-    # Hide unused subplots
-    for idx in range(n_maps, len(axes)):
-        axes[idx].axis('off')
-    
-    # Add global legend
-    patches = []
-    for class_id, info in FLOOD_CLASSES.items():
-        patch = mpatches.Patch(color=info['color'], 
-                              label=f"{class_id}: {info['name']}")
-        patches.append(patch)
-    
-    fig.legend(handles=patches, loc='center', bbox_to_anchor=(0.5, 0.02),
-              ncol=5, fontsize=12, frameon=True, fancybox=True)
-    
-    fig.suptitle(f'Patch-Based Categorized Flood Maps ({PATCH_SIZE}×{PATCH_SIZE} patches)', 
-                fontsize=16, fontweight='bold', y=0.995)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.99])
-    
-    return fig

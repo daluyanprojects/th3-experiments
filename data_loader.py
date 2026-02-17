@@ -55,22 +55,6 @@ def load_landuse_map(file_path: str) -> Tuple[np.ndarray, Dict]:
     return landuse_data, metadata
 
 
-def load_manila_mask(file_path: str) -> Tuple[np.ndarray, Dict]:
-    with rasterio.open(file_path) as src:
-        mask_data = src.read(1)
-        metadata = {
-            'transform': src.transform,
-            'crs': src.crs,
-            'width': src.width,
-            'height': src.height,
-            'bounds': src.bounds,
-            'nodata': src.nodata
-        }
-    
-    print(f"Manila mask loaded: shape {mask_data.shape}, dtype {mask_data.dtype}")
-    return mask_data, metadata
-
-
 def load_flood_map(file_path: str, scenario_id: int = None) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
         flood_data = src.read(1)
@@ -92,10 +76,61 @@ def load_flood_map(file_path: str, scenario_id: int = None) -> Tuple[np.ndarray,
     return flood_data, metadata
 
 
-def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
-    """
-    Load all flood maps from RS1 to RSX, where X = num_scenarios
-    """
+def gmm_path_load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
+    flood_maps = []
+    flood_metadata = []
+    
+    for i in range(1, num_scenarios + 1):
+        file_path = os.path.join(flood_dir, f"RS{i}_GM30COP.tif")
+        
+        if not os.path.exists(file_path):
+            print(f"Warning: {file_path} not found, skipping...")
+            continue
+            
+        flood_data, metadata = load_flood_map(file_path, scenario_id=i)
+        flood_maps.append(flood_data)
+        flood_metadata.append(metadata)
+    
+    print(f"\nTotal flood maps loaded: {len(flood_maps)}")
+    return flood_maps, flood_metadata
+
+def gmm_no_manila_path_box_load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
+    flood_maps = []
+    flood_metadata = []
+    
+    for i in range(1, num_scenarios + 1):
+        file_path = os.path.join(flood_dir, f"RS{i}_GM30COP_noManila_box.tif")
+        
+        if not os.path.exists(file_path):
+            print(f"Warning: {file_path} not found, skipping...")
+            continue
+            
+        flood_data, metadata = load_flood_map(file_path, scenario_id=i)
+        flood_maps.append(flood_data)
+        flood_metadata.append(metadata)
+    
+    print(f"\nTotal flood maps loaded: {len(flood_maps)}")
+    return flood_maps, flood_metadata
+
+def gmm_no_manila_path_shape_load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
+    flood_maps = []
+    flood_metadata = []
+    
+    for i in range(1, num_scenarios + 1):
+        file_path = os.path.join(flood_dir, f"RS{i}_GM30COP_noManila.tif")
+        
+        if not os.path.exists(file_path):
+            print(f"Warning: {file_path} not found, skipping...")
+            continue
+            
+        flood_data, metadata = load_flood_map(file_path, scenario_id=i)
+        flood_maps.append(flood_data)
+        flood_metadata.append(metadata)
+    
+    print(f"\nTotal flood maps loaded: {len(flood_maps)}")
+    return flood_maps, flood_metadata
+
+def manila_path_shape_load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
     flood_maps = []
     flood_metadata = []
     
@@ -113,12 +148,10 @@ def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.nda
     print(f"\nTotal flood maps loaded: {len(flood_maps)}")
     return flood_maps, flood_metadata
 
-
 def get_raster_stats(data: np.ndarray, name: str = "Raster") -> Dict:
-    # Filter out nodata values 
     valid_data = data[~np.isnan(data)]
     valid_data = valid_data[valid_data != -9999]
-    valid_data = valid_data[valid_data > -1e10]  # Filter extreme negative values
+    valid_data = valid_data[valid_data > -1e10] 
     
     stats = {
         'name': name,
@@ -158,22 +191,38 @@ def load_rainfall_scenario(file_path: str, scenario_id: int = None) -> pd.DataFr
         print(f"Rainfall scenario loaded: {len(df)} time steps")
     return df
 
-
-def load_all_rainfall_scenarios(rainfall_dir: str, num_scenarios: int) -> List[pd.DataFrame]:
-    scenarios = []
+def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
+    flood_maps = []
+    flood_metadata = []
     
     for i in range(1, num_scenarios + 1):
-        file_path = os.path.join(rainfall_dir, f"Rainfall_Scenario_{i}_mmhr.csv")
+        file_path = os.path.join(flood_dir, f"RS{i}_GM30COP_Manila_box.tif")
         
         if not os.path.exists(file_path):
             print(f"Warning: {file_path} not found, skipping...")
             continue
-        
-        df = load_rainfall_scenario(file_path, scenario_id=i)
-        scenarios.append(df)
+            
+        flood_data, metadata = load_flood_map(file_path, scenario_id=i)
+        flood_maps.append(flood_data)
+        flood_metadata.append(metadata)
     
+    print(f"\nTotal flood maps loaded: {len(flood_maps)}")
+    return flood_maps, flood_metadata
+
+def load_all_rainfall_scenarios(rainfall_dir: str) -> List[pd.DataFrame]:
+    scenarios = []
+
+    for file in os.listdir(rainfall_dir):
+        if file.endswith(".csv") and "Rainfall_Scenario" in file:
+            file_path = os.path.join(rainfall_dir, file)
+
+            scenario_id = int(file.split("_")[2])
+            df = load_rainfall_scenario(file_path, scenario_id=scenario_id)
+            scenarios.append(df)
+
     print(f"\nTotal rainfall scenarios loaded: {len(scenarios)}")
     return scenarios
+
 
 
 def get_rainfall_stats(scenario_df: pd.DataFrame, scenario_id: int = None) -> Dict:
@@ -205,15 +254,8 @@ def print_rainfall_stats(stats: Dict):
     print(f"Peak at hour:      {stats['peak_hour']:.4f}")
     print(f"{'='*60}\n")
 
-def visualize_raster(data: np.ndarray, 
-                     title: str = "Raster Data",
-                     cmap: str = 'terrain',
-                     figsize: Tuple[int, int] = (10, 8),
-                     vmin: Optional[float] = None,
-                     vmax: Optional[float] = None,
-                     show_colorbar: bool = True,
-                     auto_crop: bool = False) -> plt.Figure:
-
+def visualize_raster(data: np.ndarray,  title: str = "Raster Data", cmap: str = 'terrain', figsize: Tuple[int, int] = (10, 8), 
+                     vmin: Optional[float] = None, vmax: Optional[float] = None, show_colorbar: bool = True, auto_crop: bool = False) -> plt.Figure:
     fig, ax = plt.subplots(figsize=figsize)
     
     # Handle nodata values
@@ -222,7 +264,6 @@ def visualize_raster(data: np.ndarray,
     plot_data = np.ma.masked_where(plot_data == -9999, plot_data)
     plot_data = np.ma.masked_where(plot_data < -1e10, plot_data)
     
-    # AUTO-CROP: Remove white background by cropping to valid data extent
     if auto_crop:
         # Find the bounding box of valid (non-masked) data
         valid_mask = ~plot_data.mask if np.ma.is_masked(plot_data) else np.ones_like(data, dtype=bool)
@@ -253,13 +294,8 @@ def visualize_raster(data: np.ndarray,
     plt.tight_layout()
     return fig
 
-def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
-                              scenario_ids: Optional[List[int]] = None,
-                              figsize: Tuple[int, int] = (25, 20),
-                              ncols: int = 5,
-                              cmap: str = 'Blues',
-                              auto_crop: bool = False) -> plt.Figure:
-
+def visualize_flood_maps_grid(flood_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None, figsize: Tuple[int, int] = (25, 20),
+                              ncols: int = 5, cmap: str = 'Blues', auto_crop: bool = False) -> plt.Figure:
     n_maps = len(flood_maps)
     nrows = (n_maps + ncols - 1) // ncols
     
@@ -277,7 +313,7 @@ def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
         if len(valid) > 0:
             all_valid_data.extend(valid)
     
-    vmin = 0  # Flood depth minimum is always 0
+    vmin = 0  
     vmax = np.max(all_valid_data) if len(all_valid_data) > 0 else 1
     
     for idx, (flood_map, scenario_id) in enumerate(zip(flood_maps, scenario_ids)):
@@ -289,7 +325,6 @@ def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
         plot_data = np.ma.masked_where(plot_data == -9999, plot_data)
         plot_data = np.ma.masked_where(plot_data < -1e10, plot_data)
         
-        # AUTO-CROP: Remove white background
         if auto_crop:
             valid_mask = ~plot_data.mask if np.ma.is_masked(plot_data) else np.ones_like(flood_map, dtype=bool)
             rows_with_data = np.any(valid_mask, axis=1)
@@ -303,55 +338,15 @@ def visualize_flood_maps_grid(flood_maps: List[np.ndarray],
                 col_min, col_max = col_indices[0], col_indices[-1] + 1
                 plot_data = plot_data[row_min:row_max, col_min:col_max]
         
-        # Plot with consistent colorbar range
         im = ax.imshow(plot_data, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
         ax.set_title(f'RS{scenario_id}', fontsize=10, fontweight='bold')
         ax.axis('off')
         
-        # Add colorbar
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     
-    # Hide unused subplots
     for idx in range(n_maps, len(axes)):
         axes[idx].axis('off')
     
     fig.suptitle('Flood Maps for All Rainfall Scenarios', fontsize=16, fontweight='bold', y=0.995)
-    plt.tight_layout()
-    return fig
-
-def visualize_all_rainfall_scenarios(scenarios: List[pd.DataFrame],
-                                     figsize: Tuple[int, int] = (20, 15),
-                                     ncols: int = 4) -> plt.Figure:
-
-    n_scenarios = len(scenarios)
-    nrows = (n_scenarios + ncols - 1) // ncols
-    
-    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
-    axes = axes.flatten()
-    
-    for idx, scenario_df in enumerate(scenarios):
-        ax = axes[idx]
-        
-        ax.bar(scenario_df['hour'], scenario_df['intensity_mmhr'],
-               width=scenario_df['hour'].diff().fillna(0.083333).iloc[0],
-               color='steelblue', edgecolor='navy', alpha=0.7)
-        
-        ax.set_title(f'Scenario {idx+1}', fontsize=10, fontweight='bold')
-        ax.set_xlabel('Time (hr)', fontsize=8)
-        ax.set_ylabel('Intensity (mm/hr)', fontsize=8)
-        ax.grid(True, alpha=0.3, linestyle='--')
-        ax.tick_params(labelsize=8)
-        
-        # Add total rainfall
-        total = scenario_df['intensity_mmhr'].sum() * (scenario_df['hour'].iloc[1] - scenario_df['hour'].iloc[0])
-        ax.text(0.95, 0.95, f'{total:.1f} mm', transform=ax.transAxes,
-                fontsize=8, verticalalignment='top', horizontalalignment='right',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
-    
-    # Hide unused subplots
-    for idx in range(n_scenarios, len(axes)):
-        axes[idx].axis('off')
-    
-    fig.suptitle('All Rainfall Scenarios', fontsize=16, fontweight='bold', y=0.995)
     plt.tight_layout()
     return fig

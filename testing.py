@@ -6,29 +6,16 @@ from pathlib import Path
 import json
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.metrics import (confusion_matrix, accuracy_score,  precision_recall_fscore_support)
 
-from sklearn.metrics import (
-    confusion_matrix, 
-    accuracy_score, 
-    precision_recall_fscore_support,
-)
-
-def reconstruct_test_map_from_patches(
-    patch_predictions: np.ndarray,
-    original_shape: Tuple[int, int] = (320, 320),
-    patch_size: int = 4
-) -> np.ndarray:
-    
+def reconstruct_test_map_from_patches(patch_predictions: np.ndarray, original_shape: Tuple[int, int], patch_size: int) -> np.ndarray:
     H, W = original_shape
     patches_h = H // patch_size  
     patches_w = W // patch_size 
-    
     # Reshape from flat (6400,) to grid (80, 80)
     patch_grid = patch_predictions.reshape(patches_h, patches_w)
-    
     # Expand each patch to 4×4 pixels
     reconstructed_map = np.repeat(np.repeat(patch_grid, patch_size, axis=0), patch_size, axis=1)
-    
     return reconstructed_map
 
 
@@ -38,7 +25,6 @@ def predict_scenario(model: nn.Module, scenario_dataset, scenario_idx: int, devi
     patches_per_scenario = 6400
     start_idx = scenario_idx * patches_per_scenario
     end_idx = start_idx + patches_per_scenario
-    
     patch_predictions = []
     
     with torch.no_grad():
@@ -80,28 +66,19 @@ def calculate_iou_per_class(y_true: np.ndarray, y_pred: np.ndarray, num_classes:
 
 
 def calculate_scenario_metrics(ground_truth_map: np.ndarray, predicted_map: np.ndarray, num_classes: int = 5) -> Dict:
-
-    # Flatten for sklearn metrics
+    # Flatten 
     y_true = ground_truth_map.flatten()
     y_pred = predicted_map.flatten()
-    
     # Overall metrics
     accuracy = accuracy_score(y_true, y_pred)
-    
     # Per-class metrics
-    precision, recall, f1, support = precision_recall_fscore_support(
-        y_true, y_pred, labels=range(num_classes), zero_division=0
-    )
-    
+    precision, recall, f1, support = precision_recall_fscore_support(y_true, y_pred, labels=range(num_classes), zero_division=0)
     # IoU per class
     iou_per_class = calculate_iou_per_class(y_true, y_pred, num_classes)
-    
     # Mean IoU (mIoU)
     mean_iou = np.mean(list(iou_per_class.values()))
-    
     # Confusion matrix
     cm = confusion_matrix(y_true, y_pred, labels=range(num_classes))
-    
     metrics = {
         'accuracy': accuracy,
         'mean_iou': mean_iou,
@@ -112,7 +89,6 @@ def calculate_scenario_metrics(ground_truth_map: np.ndarray, predicted_map: np.n
         'support_per_class': support.tolist(),
         'confusion_matrix': cm.tolist()
     }
-    
     return metrics
 
 def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: List[int], ground_truth_maps: Dict[int, np.ndarray], device: str, save_dir: str) -> Dict:
@@ -128,22 +104,16 @@ def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: L
     
     for scenario_idx, scenario_id in enumerate(test_scenario_ids):
         print(f"\n[Scenario {scenario_id}] Predicting...")
-        
         # Predict all patches
         patch_predictions = predict_scenario(model, test_dataset, scenario_idx, device)
-        
         # Reconstruct full map
         predicted_map = reconstruct_test_map_from_patches(patch_predictions)
         all_predictions[scenario_id] = predicted_map
-        
         # Get ground truth
         ground_truth_map = ground_truth_maps[scenario_id]
-        
         # Calculate metrics
         metrics = calculate_scenario_metrics(ground_truth_map, predicted_map)
-        
         all_results[scenario_id] = metrics
-        
         # Print summary
         print(f"[Scenario {scenario_id}] Results:")
         print(f"  Accuracy:  {metrics['accuracy']:.4f}")
@@ -169,37 +139,20 @@ def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: L
         'average_accuracy': avg_accuracy,
         'average_mean_iou': avg_mean_iou
     }
-    
-    with open(save_dir / 'test_results.json', 'w') as f:
-        json.dump(results_summary, f, indent=2)
-    
-    print(f"\nResults saved to {save_dir / 'test_results.json'}")
-    
     return all_results, all_predictions
 
 
 def plot_confusion_matrix(metrics: Dict, scenario_id: int, save_path: str = None):
     cm = np.array(metrics['confusion_matrix'])
-    
     plt.figure(figsize=(8, 6))
-    sns.heatmap(
-        cm, 
-        annot=True, 
-        fmt='d', 
-        cmap='Blues',
-        xticklabels=range(5),
-        yticklabels=range(5),
-        cbar_kws={'label': 'Count'}
-    )
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=range(5), yticklabels=range(5), cbar_kws={'label': 'Count'})
     plt.title(f'Confusion Matrix - Scenario {scenario_id}')
     plt.xlabel('Predicted Class')
     plt.ylabel('True Class')
     plt.tight_layout()
-    
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Confusion matrix saved to {save_path}")
-    
     plt.show()
 
 def plot_scenario_comparison(scenario_id: int, ground_truth_map: np.ndarray, predicted_map: np.ndarray, save_path: str = None):

@@ -24,10 +24,7 @@ CONFIG_TINY = {
     'num_heads': 4,
     'mlp_ratio': 4.0,
     'dropout': 0.1,
-    'rainfall_method': 'conv', 
-    'description': 'Fast training, good for debugging',
-    'expected_params': '~500K',
-    'use_case': 'Quick experiments, debugging, baseline'
+    'rainfall_method': 'conv'
 }
 
 # Configuration 2: SMALL (RECOMMENDED STARTING POINT)
@@ -39,10 +36,7 @@ CONFIG_SMALL = {
     'num_heads': 8,
     'mlp_ratio': 4.0,
     'dropout': 0.1,
-    'rainfall_method': 'conv', 
-    'description': 'Good balance for 96K samples with temporal rainfall',
-    'expected_params': '~3M',
-    'use_case': 'Main experiments, good starting point'
+    'rainfall_method': 'conv'
 }
 
 # Configuration 3: MEDIUM (If small underfits)
@@ -54,10 +48,7 @@ CONFIG_MEDIUM = {
     'num_heads': 8,
     'mlp_ratio': 4.0,
     'dropout': 0.15,
-    'rainfall_method': 'conv',
-    'description': 'More capacity if needed',
-    'expected_params': '~8M',
-    'use_case': 'If small model underfits'
+    'rainfall_method': 'conv'
 }
 
 # Configuration 4: BASE (If you need more capacity)
@@ -69,10 +60,7 @@ CONFIG_BASE = {
     'num_heads': 8,
     'mlp_ratio': 4.0,
     'dropout': 0.2,
-    'rainfall_method': 'conv',
-    'description': 'High capacity, may need regularization',
-    'expected_params': '~20M',
-    'use_case': 'If medium model underfits, use with augmentation'
+    'rainfall_method': 'conv'
 }
 
 # Configuration 5: REGULARIZED SMALL (If overfitting occurs)
@@ -84,10 +72,7 @@ CONFIG_SMALL_REGULARIZED = {
     'num_heads': 8,
     'mlp_ratio': 4.0,
     'dropout': 0.25,
-    'rainfall_method': 'conv',
-    'description': 'Same as small but with more dropout',
-    'expected_params': '~3M',
-    'use_case': 'If small model overfits'
+    'rainfall_method': 'conv'
 }
 
 # Configuration 6: COMPACT (If you want faster training)
@@ -99,10 +84,7 @@ CONFIG_COMPACT = {
     'num_heads': 6,
     'mlp_ratio': 4.0,
     'dropout': 0.1,
-    'rainfall_method': 'conv',
-    'description': 'Faster than small, still reasonable capacity',
-    'expected_params': '~2M',
-    'use_case': 'If training time is a concern'
+    'rainfall_method': 'conv'
 }
 
 
@@ -116,7 +98,7 @@ def create_model_from_config(config: Dict[str, Any], **override_kwargs) -> ViTFl
         'dropout': config['dropout'],
         'num_classes': DATASET_INFO['num_classes'],
         'in_channels': DATASET_INFO['input_channels'],
-        'rainfall_method': config.get('rainfall_method', 'conv'), 
+        'rainfall_method': config.get('rainfall_method'), 
         'num_timesteps': DATASET_INFO['rainfall_timesteps'] 
     }
     
@@ -161,15 +143,7 @@ def compare_all_configurations():
     print(f"Output classes: {DATASET_INFO['num_classes']}")
     print("="*90)
     
-    configs = [
-        CONFIG_TINY, 
-        CONFIG_COMPACT, 
-        CONFIG_SMALL, 
-        CONFIG_SMALL_REGULARIZED,
-        CONFIG_MEDIUM, 
-        CONFIG_BASE
-    ]
-    
+    configs = [CONFIG_TINY,  CONFIG_COMPACT,  CONFIG_SMALL, CONFIG_SMALL_REGULARIZED, CONFIG_MEDIUM, CONFIG_BASE]
     print(f"\n{'Config':<30} {'Params':<12} {'Embed':<8} {'Layers':<8} {'Heads':<8} {'Rain Method':<12} {'Dropout':<10}")
     print("-"*90)
     
