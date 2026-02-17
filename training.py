@@ -18,7 +18,6 @@ class CombinedLoss(nn.Module):
         self.smooth = 1.0
     
     def dice_loss(self, pred, target):
-        """Dice loss for spatial consistency"""
         pred = torch.softmax(pred, dim=1)
         target_onehot = torch.nn.functional.one_hot(target, num_classes=5).float()
         
@@ -157,7 +156,7 @@ def validate(model, loader, criterion, device):
 
 def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: int, device: str):
     print(f"\n{'='*70}")
-    print(f"FOLD {fold_idx + 1}/3")
+    print(f"FOLD {fold_idx + 1}")
     print(f"{'='*70}")
     
     # Get class weights
@@ -181,7 +180,7 @@ def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: i
     criterion = CombinedLoss(class_weights=class_weights)
     optimizer = create_optimizer(model)
     scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=10, total_epochs=num_epochs)
-    early_stop = EarlyStopping(patience=20)
+    early_stop = EarlyStopping(patience=5)
     
     best_val_loss = float('inf')
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'lr': []}
@@ -216,7 +215,7 @@ def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: i
     return history, best_val_loss
 
 
-def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size=64, num_epochs=100, device='cuda', num_folds=3):
+def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size, num_epochs, device, num_folds):
     scenario_ids = list(scenario_to_samples.keys())
     folds = create_kfold_splits(scenario_ids=scenario_ids, num_folds=num_folds)
     

@@ -6,6 +6,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Optional, Tuple, List
+import glob
+from pathlib import Path
+
 
 def load_dem(file_path: str) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
@@ -22,7 +25,6 @@ def load_dem(file_path: str) -> Tuple[np.ndarray, Dict]:
     print(f"DEM loaded: shape {dem_data.shape}, dtype {dem_data.dtype}")
     return dem_data, metadata
 
-
 def load_infiltration_map(file_path: str) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
         infilt_data = src.read(1)
@@ -38,7 +40,6 @@ def load_infiltration_map(file_path: str) -> Tuple[np.ndarray, Dict]:
     print(f"Infiltration map loaded: shape {infilt_data.shape}, dtype {infilt_data.dtype}")
     return infilt_data, metadata
 
-
 def load_landuse_map(file_path: str) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
         landuse_data = src.read(1)
@@ -53,7 +54,6 @@ def load_landuse_map(file_path: str) -> Tuple[np.ndarray, Dict]:
     
     print(f"Landuse map loaded: shape {landuse_data.shape}, dtype {landuse_data.dtype}")
     return landuse_data, metadata
-
 
 def load_flood_map(file_path: str, scenario_id: int = None) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
@@ -75,6 +75,31 @@ def load_flood_map(file_path: str, scenario_id: int = None) -> Tuple[np.ndarray,
     
     return flood_data, metadata
 
+def load_multiple_map(folder_path: str) -> Tuple[Dict[str, np.ndarray], Dict]:
+    tif_files = sorted(glob.glob(os.path.join(folder_path, "*.tif")))
+    print(f"Found {len(tif_files)} drainage file(s):")
+    drainage_data = {}
+    metadata = None
+    for tif_path in tif_files:
+        layer_name = Path(tif_path).stem 
+
+        with rasterio.open(tif_path) as src:
+            data = src.read(1).astype(np.float64)
+
+            if metadata is None:
+                metadata = {
+                    'transform': src.transform,
+                    'crs': src.crs,
+                    'width': src.width,
+                    'height': src.height,
+                    'bounds': src.bounds,
+                    'nodata': src.nodata
+                }
+
+        drainage_data[layer_name] = data
+        print(f"  [{layer_name}]: shape {data.shape}, dtype {data.dtype}")
+
+    return drainage_data, metadata
 
 def gmm_path_load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
     flood_maps = []
@@ -167,7 +192,6 @@ def get_raster_stats(data: np.ndarray, name: str = "Raster") -> Dict:
     
     return stats
 
-
 def print_raster_stats(stats: Dict):
     print(f"\n{'='*60}")
     print(f"Statistics for: {stats['name']}")
@@ -180,7 +204,6 @@ def print_raster_stats(stats: Dict):
     print(f"Std dev:       {stats['std']:.4f}" if stats['std'] is not None else "Std dev:       None")
     print(f"Valid pixels:  {stats['valid_pixels']:,} / {stats['total_pixels']:,}")
     print(f"{'='*60}\n")
-
 
 def load_rainfall_scenario(file_path: str, scenario_id: int = None) -> pd.DataFrame:
     df = pd.read_csv(file_path)
@@ -223,8 +246,6 @@ def load_all_rainfall_scenarios(rainfall_dir: str) -> List[pd.DataFrame]:
     print(f"\nTotal rainfall scenarios loaded: {len(scenarios)}")
     return scenarios
 
-
-
 def get_rainfall_stats(scenario_df: pd.DataFrame, scenario_id: int = None) -> Dict:
     stats = {
         'scenario_id': scenario_id,
@@ -237,7 +258,6 @@ def get_rainfall_stats(scenario_df: pd.DataFrame, scenario_id: int = None) -> Di
     }
     
     return stats
-
 
 def print_rainfall_stats(stats: Dict):
     print(f"\n{'='*60}")
@@ -292,6 +312,22 @@ def visualize_raster(data: np.ndarray,  title: str = "Raster Data", cmap: str = 
         cbar.ax.tick_params(labelsize=10)
     
     plt.tight_layout()
+    return fig
+
+def visualize_multiple_grid(data: Dict[str, np.ndarray], figsize: Tuple[int, int], cmap: str) -> plt.Figure:
+    layers = list(data.items())
+    n = len(layers)
+    fig, axes = plt.subplots(1, n, figsize=figsize)
+    for ax, (layer_name, layer_data) in zip(axes, layers):
+        display_data = layer_data.copy().astype(np.float64)
+        im = ax.imshow(display_data, cmap=cmap)
+        ax.set_title(layer_name.replace('_', ' ').title(), fontweight='bold', fontsize=11)
+        ax.axis('off')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    plt.suptitle('Drainage Layers', fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    plt.show()
+
     return fig
 
 def visualize_flood_maps_grid(flood_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None, figsize: Tuple[int, int] = (25, 20),

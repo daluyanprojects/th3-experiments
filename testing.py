@@ -91,11 +91,11 @@ def calculate_scenario_metrics(ground_truth_map: np.ndarray, predicted_map: np.n
     }
     return metrics
 
-def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: List[int], ground_truth_maps: Dict[int, np.ndarray], device: str, save_dir: str) -> Dict:
+def evaluate_test_scenarios(model: nn.Module, patch_size, test_dataset, test_scenario_ids: List[int], ground_truth_maps: Dict[int, np.ndarray], device: str, save_dir: str) -> Dict:
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    print("\n" + "="*70)
+    print("\n" + "="*70) 
     print("EVALUATING TEST SCENARIOS")
     print("="*70)
     
@@ -107,7 +107,7 @@ def evaluate_test_scenarios(model: nn.Module, test_dataset, test_scenario_ids: L
         # Predict all patches
         patch_predictions = predict_scenario(model, test_dataset, scenario_idx, device)
         # Reconstruct full map
-        predicted_map = reconstruct_test_map_from_patches(patch_predictions)
+        predicted_map = reconstruct_test_map_from_patches(patch_predictions, (320,320), patch_size)
         all_predictions[scenario_id] = predicted_map
         # Get ground truth
         ground_truth_map = ground_truth_maps[scenario_id]
