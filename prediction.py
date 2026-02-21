@@ -2,473 +2,285 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-from matplotlib.patches import Rectangle
 from pathlib import Path
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 from tqdm import tqdm
 
-def reconstruct_ground_truth_maps(
-    test_loader,
-    test_metadata,
-    spatial_shape=(1152, 1152),
-    patch_size=16
-):
-    """Reconstruct ground truth spatial maps from test patches"""
-    
+from training import FloodPatchDataset, DEVICE, BATCH_SIZE, NUM_CLASSES, CLASS_NAMES
+from torch.utils.data import DataLoader
+
+OUTPUT_DIR  = Path('./outputs')
+PATCH_SIZE  = 4                         # must match training config
+SPATIAL_SHAPE = (1152, 1152)            # full spatial grid dimensions
+
+CLASS_COLORS = ['#FFFFFF', '#FDD835', '#FB8C00', '#E53935', '#6A1B9A']
+CMAP_FLOOD   = ListedColormap(['#CCCCCC'] + CLASS_COLORS)  # gray = NoData
+
+
+def reconstruct_ground_truth_maps(test_metadata: List[Dict], y_test: np.ndarray, spatial_shape: Tuple[int, int] = SPATIAL_SHAPE, patch_size: int = PATCH_SIZE) -> Dict[int, np.ndarray]:
     print("\n[Reconstructing Ground Truth Maps]")
-    print("-" * 70)
-    
-    all_labels = []
-    
-    # Collect all labels
-    for _, _, labels in test_loader:
-        all_labels.extend(labels.cpu().numpy())
-    
-    all_labels = np.array(all_labels)
-    
-    # Group by scenario
-    scenarios = {}
-    for idx, metadata in enumerate(test_metadata):
-        scenario_id = metadata['scenario_id']
-        
-        if scenario_id not in scenarios:
-            scenarios[scenario_id] = {
-                'labels': [],
-                'coords': []
-            }
-        
-        scenarios[scenario_id]['labels'].append(all_labels[idx])
-        scenarios[scenario_id]['coords'].append(metadata['patch_coord'])
-    
-    # Reconstruct maps
+    print("-" * 60)
+
+    scenarios: Dict = {}
+    for idx, meta in enumerate(test_metadata):
+        sid = meta['scenario_id']
+        if sid not in scenarios:
+            scenarios[sid] = {'labels': [], 'coords': []}
+        scenarios[sid]['labels'].append(int(y_test[idx]))
+        scenarios[sid]['coords'].append(meta['patch_coord'])
+
     ground_truth_maps = {}
-    
-    for scenario_id, data in scenarios.items():
-        # Initialize empty map
+    for sid, data in scenarios.items():
         gt_map = np.full(spatial_shape, -1, dtype=np.int8)
-        
-        # Fill in ground truth
         for label, (i, j) in zip(data['labels'], data['coords']):
-            row_start = i * patch_size
-            row_end = (i + 1) * patch_size
-            col_start = j * patch_size
-            col_end = (j + 1) * patch_size
-            
-            gt_map[row_start:row_end, col_start:col_end] = label
-        
-        ground_truth_maps[scenario_id] = gt_map
-        print(f"  Scenario {scenario_id}: {len(data['labels'])} patches")
-    
-    print(f"✓ Reconstructed {len(ground_truth_maps)} ground truth maps\n")
-    
+            r0, r1 = i * patch_size, (i + 1) * patch_size
+            c0, c1 = j * patch_size, (j + 1) * patch_size
+            gt_map[r0:r1, c0:c1] = label
+        ground_truth_maps[sid] = gt_map
+        print(f"  Scenario {sid}: {len(data['labels'])} patches")
+
+    print(f"✓ Reconstructed {len(ground_truth_maps)} ground truth maps")
     return ground_truth_maps
 
-def generate_prediction_maps(
-    trainer,
-    test_loader,
-    test_metadata,
-    spatial_shape=(1152, 1152),
-    patch_size=16,
-    output_dir='./predictions'
-):
-    """
-    Generate full spatial prediction maps from patch predictions
-    
-    Args:
-        trainer: Trained model
-        test_loader: Test data loader
-        test_metadata: Metadata with patch coordinates
-        spatial_shape: Full spatial dimension
-        patch_size: Patch size used
-        output_dir: Directory to save results
-    
-    Returns:
-        Dictionary with prediction maps for each scenario
-    """
-    
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    print("\n" + "="*70)
-    print("PHASE 13: PREDICTION PIPELINE")
-    print("="*70)
-    
-    # =========================================================================
-    # 13.1 RECONSTRUCT PREDICTION MAPS
-    # =========================================================================
-    print("\n[13.1] Reconstructing Prediction Maps")
-    print("-" * 70)
-    
-    prediction_maps = reconstruct_spatial_predictions(
-        trainer,
-        test_loader,
-        test_metadata,
-        spatial_shape,
-        patch_size
-    )
-    
-    # =========================================================================
-    # 13.2 VISUALIZATION
-    # =========================================================================
-    print("\n[13.2] Generating Visualizations")
-    print("-" * 70)
-    
-    visualize_predictions(
-        prediction_maps,
-        output_path
-    )
-    
-    # =========================================================================
-    # 13.3 CONFIDENCE MAPPING
-    # =========================================================================
-    print("\n[13.3] Generating Confidence Maps")
-    print("-" * 70)
-    
-    confidence_maps = generate_confidence_maps(
-        prediction_maps,
-        output_path
-    )
-    
-    print("\n" + "="*70)
-    print("✅ PREDICTION PIPELINE COMPLETE")
-    print("="*70)
-    print(f"Results saved to: {output_path}")
-    print("="*70 + "\n")
-    
-    return {
-        'predictions': prediction_maps,
-        'confidence': confidence_maps
-    }
 
-def reconstruct_spatial_predictions(
-    trainer,
-    test_loader,
-    test_metadata,
-    spatial_shape,
-    patch_size
-):
-    """Reconstruct full spatial maps from patch predictions"""
+@torch.no_grad()
+def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, test_metadata: List[Dict], 
+                             spatial_shape: Tuple[int, int] = SPATIAL_SHAPE, patch_size: int = PATCH_SIZE, 
+                             output_dir: Path = OUTPUT_DIR / 'predictions') -> Dict:
     
-    trainer.model.eval()
-    
-    # Get all predictions and probabilities
-    all_predictions = []
-    all_probs = []
-    
-    print("  Collecting predictions...")
-    with torch.no_grad():
-        for spatial, rainfall, labels in tqdm(test_loader, desc="  Predicting"):
-            spatial = spatial.to(trainer.device)
-            rainfall = rainfall.to(trainer.device)
-            
-            logits, _ = trainer.model(spatial, rainfall)
-            probs = torch.softmax(logits, dim=1)
-            _, predicted = logits.max(1)
-            
-            all_predictions.extend(predicted.cpu().numpy())
-            all_probs.extend(probs.cpu().numpy())
-    
-    all_predictions = np.array(all_predictions)
-    all_probs = np.array(all_probs)
-    
-    # Group by scenario
-    scenarios = {}
-    for idx, metadata in enumerate(test_metadata):
-        scenario_id = metadata['scenario_id']
-        
-        if scenario_id not in scenarios:
-            scenarios[scenario_id] = {
-                'predictions': [],
-                'probabilities': [],
-                'coords': []
-            }
-        
-        scenarios[scenario_id]['predictions'].append(all_predictions[idx])
-        scenarios[scenario_id]['probabilities'].append(all_probs[idx])
-        scenarios[scenario_id]['coords'].append(metadata['patch_coord'])
-    
-    # Reconstruct maps for each scenario
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\n" + "="*60)
+    print("PREDICTION PIPELINE")
+    print("="*60)
+
+    # ── 1. Collect predictions ──────────────────
+    print("\n[1] Running inference...")
+    model.eval()
+    all_preds, all_probs = [], []
+
+    for spatial, rainfall, _ in tqdm(test_loader, desc="  Predicting"):
+        spatial  = spatial.to(DEVICE)
+        rainfall = rainfall.to(DEVICE)
+        logits, _ = model(spatial, rainfall)
+        probs     = torch.softmax(logits, dim=1)
+        all_preds.extend(logits.argmax(1).cpu().numpy())
+        all_probs.extend(probs.cpu().numpy())
+
+    all_preds = np.array(all_preds)           # (N,)
+    all_probs = np.array(all_probs)           # (N, C)
+
+    # ── 2. Group by scenario ────────────────────
+    print("\n[2] Reconstructing spatial maps...")
+    scenarios: Dict = {}
+    for idx, meta in enumerate(test_metadata):
+        sid = meta['scenario_id']
+        if sid not in scenarios:
+            scenarios[sid] = {'preds': [], 'probs': [], 'coords': []}
+        scenarios[sid]['preds'].append(all_preds[idx])
+        scenarios[sid]['probs'].append(all_probs[idx])
+        scenarios[sid]['coords'].append(meta['patch_coord'])
+
+    # ── 3. Reconstruct maps ─────────────────────
     prediction_maps = {}
-    
-    print(f"\n  Reconstructing {len(scenarios)} scenario maps...")
-    for scenario_id, data in scenarios.items():
-        # Initialize empty map
-        pred_map = np.full(spatial_shape, -1, dtype=np.int8)
-        prob_map = np.zeros(spatial_shape + (5,), dtype=np.float32)
-        
-        # Fill in predictions
-        for pred, prob, (i, j) in zip(data['predictions'], data['probabilities'], data['coords']):
-            row_start = i * patch_size
-            row_end = (i + 1) * patch_size
-            col_start = j * patch_size
-            col_end = (j + 1) * patch_size
-            
-            pred_map[row_start:row_end, col_start:col_end] = pred
-            prob_map[row_start:row_end, col_start:col_end] = prob
-        
-        prediction_maps[scenario_id] = {
+    for sid, data in scenarios.items():
+        pred_map = np.full(spatial_shape,           -1,  dtype=np.int8)
+        prob_map = np.zeros(spatial_shape + (NUM_CLASSES,), dtype=np.float32)
+
+        for pred, prob, (i, j) in zip(data['preds'], data['probs'], data['coords']):
+            r0, r1 = i * patch_size, (i + 1) * patch_size
+            c0, c1 = j * patch_size, (j + 1) * patch_size
+            pred_map[r0:r1, c0:c1] = pred
+            prob_map[r0:r1, c0:c1] = prob
+
+        prediction_maps[sid] = {
             'prediction_map': pred_map,
             'probability_map': prob_map,
-            'confidence_map': prob_map.max(axis=2)
+            'confidence_map':  prob_map.max(axis=2),
         }
-        
-        print(f"    Scenario {scenario_id}: {len(data['predictions'])} patches")
-    
-    print(f"  ✓ Reconstructed {len(prediction_maps)} scenario maps")
-    
-    return prediction_maps
+        print(f"  Scenario {sid}: {len(data['preds'])} patches")
 
-def visualize_predictions(prediction_maps, output_path):    
-    # Define color scheme
-    class_colors = ['#FFFFFF', '#FDD835', '#FB8C00', '#E53935', '#6A1B9A']  # White, Yellow, Orange, Red, Purple
-    class_names = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
-    cmap = ListedColormap(['#CCCCCC'] + class_colors)  # Gray for NoData
-    
-    # Visualize each scenario
-    for scenario_id, maps in prediction_maps.items():
-        pred_map = maps['prediction_map']
-        
-        fig, ax = plt.subplots(figsize=(12, 10))
-        
-        # Plot prediction map
-        im = ax.imshow(pred_map, cmap=cmap, vmin=-1, vmax=4, interpolation='nearest')
-        
-        # Add colorbar
-        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[-1, 0, 1, 2, 3, 4])
-        cbar.set_label('Flood Class', fontsize=12, fontweight='bold')
-        cbar.ax.set_yticklabels(['NoData'] + class_names)
-        
-        # Styling
-        ax.set_title(f'Predicted Flood Map - Scenario {scenario_id}\n(Manila Core Region)', 
-                     fontsize=14, fontweight='bold')
-        ax.axis('off')
-        
-        plt.tight_layout()
-        plt.savefig(output_path / f'prediction_scenario_{scenario_id}.png', 
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-    
-    print(f"  ✓ Saved {len(prediction_maps)} prediction maps")
-    
-    # Create summary grid
-    create_prediction_grid(prediction_maps, output_path, class_colors)
+    # ── 4. Visualise ────────────────────────────
+    print("\n[3] Generating visualisations...")
+    _visualize_predictions(prediction_maps, output_dir)
+
+    print("\n[4] Generating confidence maps...")
+    confidence_maps = _generate_confidence_maps(prediction_maps, output_dir)
+
+    print("\n" + "="*60)
+    print(f"✅ Done  —  results in: {output_dir}")
+    print("="*60)
+
+    return {'predictions': prediction_maps, 'confidence': confidence_maps}
 
 
-def create_prediction_grid(prediction_maps, output_path, class_colors):    
-    num_scenarios = len(prediction_maps)
-    ncols = 3
-    nrows = (num_scenarios + ncols - 1) // ncols
-    
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 4*nrows))
-    axes = axes.flatten() if num_scenarios > 1 else [axes]
-    
-    cmap = ListedColormap(['#CCCCCC'] + class_colors)
-    
-    for idx, (scenario_id, maps) in enumerate(prediction_maps.items()):
-        ax = axes[idx]
-        pred_map = maps['prediction_map']
-        
-        im = ax.imshow(pred_map, cmap=cmap, vmin=-1, vmax=4, interpolation='nearest')
-        ax.set_title(f'Scenario {scenario_id}', fontsize=10, fontweight='bold')
-        ax.axis('off')
-    
-    # Hide unused subplots
-    for idx in range(num_scenarios, len(axes)):
-        axes[idx].axis('off')
-    
-    # Add shared colorbar
-    class_names = ['NoData', 'No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
-    cbar = plt.colorbar(im, ax=axes, fraction=0.02, pad=0.04, ticks=[-1, 0, 1, 2, 3, 4])
-    cbar.set_label('Flood Class', fontsize=11, fontweight='bold')
-    cbar.ax.set_yticklabels(class_names, fontsize=9)
-    
-    plt.suptitle('Predicted Flood Maps - All Test Scenarios (Manila Core)', 
-                fontsize=14, fontweight='bold', y=0.995)
-    plt.savefig(output_path / 'prediction_grid_all_scenarios.png', 
-               dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"  ✓ Saved prediction grid")
+def compare_with_ground_truth(prediction_maps: Dict, ground_truth_maps: Dict, output_dir: Path = OUTPUT_DIR / 'predictions'):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("\n[Comparison] Ground Truth vs Predictions")
+    print("-" * 60)
 
-def generate_confidence_maps(prediction_maps, output_path):    
-    confidence_maps = {}
-    
-    for scenario_id, maps in prediction_maps.items():
-        confidence_map = maps['confidence_map']
-        confidence_maps[scenario_id] = confidence_map
-        
-        # Visualize confidence
-        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-        
-        # Confidence map
-        ax1 = axes[0]
-        im1 = ax1.imshow(confidence_map, cmap='RdYlGn', vmin=0, vmax=1, interpolation='nearest')
-        ax1.set_title(f'Prediction Confidence - Scenario {scenario_id}', 
-                     fontsize=12, fontweight='bold')
-        ax1.axis('off')
-        cbar1 = plt.colorbar(im1, ax=ax1, fraction=0.046)
-        cbar1.set_label('Confidence', fontsize=11)
-        
-        # Low confidence regions (< 0.5)
-        ax2 = axes[1]
-        low_conf_mask = (confidence_map < 0.5) & (confidence_map > 0)
-        im2 = ax2.imshow(low_conf_mask, cmap='Reds', interpolation='nearest')
-        ax2.set_title(f'Low Confidence Regions (<50%) - Scenario {scenario_id}', 
-                     fontsize=12, fontweight='bold')
-        ax2.axis('off')
-        
-        low_conf_count = low_conf_mask.sum()
-        valid_pixels = (confidence_map > 0).sum()
-        low_conf_pct = low_conf_count / valid_pixels * 100 if valid_pixels > 0 else 0
-        
-        ax2.text(0.5, -0.05, f'Low confidence: {low_conf_count:,} pixels ({low_conf_pct:.1f}%)',
-                transform=ax2.transAxes, ha='center', fontsize=10)
-        
-        plt.tight_layout()
-        plt.savefig(output_path / f'confidence_scenario_{scenario_id}.png', 
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-    
-    print(f"  ✓ Saved {len(confidence_maps)} confidence maps")
-    
-    # Aggregate confidence statistics
-    analyze_confidence_statistics(confidence_maps, output_path)
-    
-    return confidence_maps
-
-
-def analyze_confidence_statistics(confidence_maps, output_path):    
-    all_confidences = []
-    
-    for scenario_id, conf_map in confidence_maps.items():
-        valid_conf = conf_map[conf_map > 0]
-        all_confidences.append(valid_conf)
-    
-    all_confidences = np.concatenate(all_confidences)
-    
-    print(f"\n  Confidence Statistics:")
-    print(f"    Mean:   {all_confidences.mean():.4f}")
-    print(f"    Median: {np.median(all_confidences):.4f}")
-    print(f"    Std:    {all_confidences.std():.4f}")
-    print(f"    Min:    {all_confidences.min():.4f}")
-    print(f"    Max:    {all_confidences.max():.4f}")
-    
-    # Distribution
-    low_conf = (all_confidences < 0.5).sum() / len(all_confidences) * 100
-    mid_conf = ((all_confidences >= 0.5) & (all_confidences < 0.8)).sum() / len(all_confidences) * 100
-    high_conf = (all_confidences >= 0.8).sum() / len(all_confidences) * 100
-    
-    print(f"\n  Confidence Distribution:")
-    print(f"    Low (<0.5):      {low_conf:.1f}%")
-    print(f"    Medium (0.5-0.8): {mid_conf:.1f}%")
-    print(f"    High (>0.8):     {high_conf:.1f}%")
-    
-    # Plot histogram
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    ax.hist(all_confidences, bins=50, color='steelblue', edgecolor='black', alpha=0.7)
-    ax.axvline(all_confidences.mean(), color='red', linestyle='--', linewidth=2, 
-              label=f'Mean: {all_confidences.mean():.3f}')
-    ax.axvline(np.median(all_confidences), color='orange', linestyle='--', linewidth=2,
-              label=f'Median: {np.median(all_confidences):.3f}')
-    
-    ax.set_xlabel('Prediction Confidence', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Frequency', fontsize=12, fontweight='bold')
-    ax.set_title('Prediction Confidence Distribution (All Test Scenarios)', 
-                fontsize=14, fontweight='bold')
-    ax.legend(fontsize=11)
-    ax.grid(alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(output_path / 'confidence_histogram.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"  ✓ Saved confidence histogram")
-
-def compare_with_ground_truth_cropped(prediction_maps, ground_truth_maps, output_path):
-    
-    print("\n[Comparison] Ground Truth vs Predictions (Cropped View)")
-    print("-" * 70)
-    
-    class_colors = ['#FFFFFF', '#FDD835', '#FB8C00', '#E53935', '#6A1B9A']
-    cmap = ListedColormap(['#CCCCCC'] + class_colors)
-    
-    for scenario_id in prediction_maps.keys():
-        if scenario_id not in ground_truth_maps:
+    saved = 0
+    for sid, maps in prediction_maps.items():
+        if sid not in ground_truth_maps:
+            print(f"  ⚠ Scenario {sid}: no ground truth, skipping")
             continue
-        
-        pred_map = prediction_maps[scenario_id]['prediction_map']
-        true_map = ground_truth_maps[scenario_id]
-        
-        # Find bounding box of valid data
-        valid_mask = (true_map >= 0) & (pred_map >= 0)
-        rows, cols = np.where(valid_mask)
-        
+
+        pred_map = maps['prediction_map']
+        true_map = ground_truth_maps[sid]
+
+        # Crop to bounding box of valid data
+        valid = (true_map >= 0) & (pred_map >= 0)
+        rows, cols = np.where(valid)
         if len(rows) == 0:
-            print(f"  ⚠ Scenario {scenario_id}: No valid data")
+            print(f"  ⚠ Scenario {sid}: no valid overlap")
             continue
-        
-        # Add padding
-        padding = 20
-        row_min = max(0, rows.min() - padding)
-        row_max = min(true_map.shape[0], rows.max() + padding)
-        col_min = max(0, cols.min() - padding)
-        col_max = min(true_map.shape[1], cols.max() + padding)
-        
-        # Crop to valid region
-        true_crop = true_map[row_min:row_max, col_min:col_max]
-        pred_crop = pred_map[row_min:row_max, col_min:col_max]
-        
-        # FIX: Add constrained_layout=True
+
+        pad = 20
+        r0 = max(0, rows.min() - pad);  r1 = min(true_map.shape[0], rows.max() + pad)
+        c0 = max(0, cols.min() - pad);  c1 = min(true_map.shape[1], cols.max() + pad)
+
+        true_crop = true_map[r0:r1, c0:c1]
+        pred_crop = pred_map[r0:r1, c0:c1]
+
+        valid_crop = (true_crop >= 0) & (pred_crop >= 0)
+        correct    = (pred_crop[valid_crop] == true_crop[valid_crop]).sum()
+        accuracy   = correct / valid_crop.sum() * 100 if valid_crop.sum() > 0 else 0.0
+
+        # Accuracy map: -1=NoData, 0=Wrong, 1=Correct
+        acc_map = np.full_like(true_crop, -1, dtype=np.int8)
+        acc_map[valid_crop] = (pred_crop[valid_crop] == true_crop[valid_crop]).astype(np.int8)
+
         fig, axes = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
-        
-        # Ground truth
-        ax1 = axes[0]
-        im1 = ax1.imshow(true_crop, cmap=cmap, vmin=-1, vmax=4, interpolation='nearest')
-        ax1.set_title('Ground Truth\n(Manila Core)', fontsize=12, fontweight='bold')
-        ax1.axis('off')
-        
-        # Prediction
-        ax2 = axes[1]
-        im2 = ax2.imshow(pred_crop, cmap=cmap, vmin=-1, vmax=4, interpolation='nearest')
-        ax2.set_title('Prediction\n(Model Output)', fontsize=12, fontweight='bold')
-        ax2.axis('off')
-        
-        # Difference
-        valid_crop_mask = (true_crop >= 0) & (pred_crop >= 0)
-        diff_crop = np.full_like(true_crop, -1, dtype=np.int8)
-        diff_crop[valid_crop_mask] = (pred_crop[valid_crop_mask] == true_crop[valid_crop_mask]).astype(np.int8)
-        
-        ax3 = axes[2]
-        im3 = ax3.imshow(diff_crop, cmap=ListedColormap(['#CCCCCC', '#E53935', '#2E7D32']), 
-                        vmin=-1, vmax=1, interpolation='nearest')
-        ax3.set_title('Accuracy Map\n(Green=Correct, Red=Wrong)', fontsize=12, fontweight='bold')
-        ax3.axis('off')
-        
-        # Calculate accuracy
-        correct = (pred_crop[valid_crop_mask] == true_crop[valid_crop_mask]).sum()
-        total = valid_crop_mask.sum()
-        accuracy = correct / total * 100 if total > 0 else 0
-        
-        # Shared colorbar
-        class_names = ['NoData', 'No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
-        cbar = plt.colorbar(im1, ax=axes[:2], fraction=0.02, pad=0.04, 
-                           ticks=[-1, 0, 1, 2, 3, 4])
+
+        axes[0].imshow(true_crop, cmap=CMAP_FLOOD, vmin=-1, vmax=4, interpolation='nearest')
+        axes[0].set_title('Ground Truth', fontsize=12, fontweight='bold')
+        axes[0].axis('off')
+
+        im_pred = axes[1].imshow(pred_crop, cmap=CMAP_FLOOD, vmin=-1, vmax=4, interpolation='nearest')
+        axes[1].set_title('Prediction', fontsize=12, fontweight='bold')
+        axes[1].axis('off')
+
+        axes[2].imshow(acc_map,
+                       cmap=ListedColormap(['#CCCCCC', '#E53935', '#2E7D32']),
+                       vmin=-1, vmax=1, interpolation='nearest')
+        axes[2].set_title('Accuracy Map\n(Green=Correct, Red=Wrong)', fontsize=12, fontweight='bold')
+        axes[2].axis('off')
+
+        cbar = plt.colorbar(im_pred, ax=axes[:2], fraction=0.02, pad=0.04, ticks=[-1,0,1,2,3,4])
         cbar.set_label('Flood Class', fontsize=11, fontweight='bold')
-        cbar.ax.set_yticklabels(class_names, fontsize=9)
-        
-        # Add info
-        info_text = f'Region: [{row_min}:{row_max}, {col_min}:{col_max}]\nSize: {row_max-row_min}×{col_max-col_min} pixels'
-        fig.text(0.5, 0.01, info_text, ha='center', fontsize=9, style='italic')
-        
-        plt.suptitle(f'Scenario {scenario_id} - Spatial Accuracy: {accuracy:.1f}%', 
-                    fontsize=14, fontweight='bold')
-        # REMOVE: plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # ← REMOVE THIS LINE
-        plt.savefig(output_path / f'comparison_cropped_scenario_{scenario_id}.png', 
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print(f"  Scenario {scenario_id}: Cropped to {row_max-row_min}×{col_max-col_min}, Accuracy: {accuracy:.1f}%")
-    
-    print(f"  ✓ Saved {len(prediction_maps)} cropped comparison plots")
+        cbar.ax.set_yticklabels(['NoData'] + CLASS_NAMES, fontsize=9)
+
+        fig.text(0.5, 0.01,
+                 f'Region [{r0}:{r1}, {c0}:{c1}]  —  {r1-r0}×{c1-c0} px',
+                 ha='center', fontsize=9, style='italic')
+        plt.suptitle(f'Scenario {sid}  —  Spatial Accuracy: {accuracy:.1f}%',
+                     fontsize=14, fontweight='bold')
+
+        fig.savefig(output_dir / f'comparison_scenario_{sid}.png', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+        print(f"  Scenario {sid}: {r1-r0}×{c1-c0} crop, acc={accuracy:.1f}%")
+        saved += 1
+
+    print(f"✓ Saved {saved} comparison plots")
+
+def _visualize_predictions(prediction_maps: Dict, output_dir: Path):
+    for sid, maps in prediction_maps.items():
+        fig, ax = plt.subplots(figsize=(10, 9))
+        im = ax.imshow(maps['prediction_map'], cmap=CMAP_FLOOD, vmin=-1, vmax=4,
+                       interpolation='nearest')
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[-1,0,1,2,3,4])
+        cbar.set_label('Flood Class', fontsize=12, fontweight='bold')
+        cbar.ax.set_yticklabels(['NoData'] + CLASS_NAMES)
+        ax.set_title(f'Predicted Flood Map — Scenario {sid}', fontsize=13, fontweight='bold')
+        ax.axis('off')
+        plt.tight_layout()
+        fig.savefig(output_dir / f'prediction_scenario_{sid}.png', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    # Summary grid
+    n  = len(prediction_maps)
+    nc = min(3, n)
+    nr = (n + nc - 1) // nc
+    fig, axes = plt.subplots(nr, nc, figsize=(5*nc, 4*nr))
+    axes = np.array(axes).flatten()
+
+    last_im = None
+    for idx, (sid, maps) in enumerate(prediction_maps.items()):
+        last_im = axes[idx].imshow(maps['prediction_map'], cmap=CMAP_FLOOD,
+                                   vmin=-1, vmax=4, interpolation='nearest')
+        axes[idx].set_title(f'Scenario {sid}', fontsize=10, fontweight='bold')
+        axes[idx].axis('off')
+    for idx in range(n, len(axes)):
+        axes[idx].axis('off')
+
+    if last_im is not None:
+        cbar = plt.colorbar(last_im, ax=axes, fraction=0.02, pad=0.04, ticks=[-1,0,1,2,3,4])
+        cbar.set_label('Flood Class', fontsize=11, fontweight='bold')
+        cbar.ax.set_yticklabels(['NoData'] + CLASS_NAMES, fontsize=9)
+
+    plt.suptitle('Predicted Flood Maps — All Test Scenarios', fontsize=13, fontweight='bold')
+    fig.savefig(output_dir / 'prediction_grid.png', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  ✓ Saved {n} prediction maps + grid")
+
+
+def _generate_confidence_maps(prediction_maps: Dict, output_dir: Path) -> Dict:
+    confidence_maps = {}
+    all_conf = []
+
+    for sid, maps in prediction_maps.items():
+        conf = maps['confidence_map']
+        confidence_maps[sid] = conf
+        valid = conf[conf > 0]
+        if len(valid):
+            all_conf.append(valid)
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
+
+        im1 = axes[0].imshow(conf, cmap='RdYlGn', vmin=0, vmax=1, interpolation='nearest')
+        axes[0].set_title(f'Confidence — Scenario {sid}', fontsize=12, fontweight='bold')
+        axes[0].axis('off')
+        plt.colorbar(im1, ax=axes[0], fraction=0.046).set_label('Confidence', fontsize=10)
+
+        low_mask = (conf < 0.5) & (conf > 0)
+        axes[1].imshow(low_mask, cmap='Reds', interpolation='nearest')
+        axes[1].set_title('Low Confidence Regions (<50%)', fontsize=12, fontweight='bold')
+        axes[1].axis('off')
+        n_low  = low_mask.sum()
+        n_all  = (conf > 0).sum()
+        pct    = n_low / n_all * 100 if n_all > 0 else 0
+        axes[1].text(0.5, -0.04, f'{n_low:,} pixels ({pct:.1f}%)',
+                     transform=axes[1].transAxes, ha='center', fontsize=10)
+
+        fig.savefig(output_dir / f'confidence_scenario_{sid}.png', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    # Aggregate stats + histogram
+    if all_conf:
+        flat = np.concatenate(all_conf)
+        print(f"\n  Confidence Statistics (all scenarios):")
+        print(f"    Mean   : {flat.mean():.4f}")
+        print(f"    Median : {np.median(flat):.4f}")
+        print(f"    Std    : {flat.std():.4f}")
+        print(f"    Min/Max: {flat.min():.4f} / {flat.max():.4f}")
+        low = (flat < 0.5).mean() * 100
+        mid = ((flat >= 0.5) & (flat < 0.8)).mean() * 100
+        high= (flat >= 0.8).mean() * 100
+        print(f"    Low (<0.5): {low:.1f}%  Mid (0.5-0.8): {mid:.1f}%  High (>0.8): {high:.1f}%")
+
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.hist(flat, bins=50, color='steelblue', edgecolor='black', alpha=0.7)
+        ax.axvline(flat.mean(),       color='red',    linestyle='--', lw=2, label=f'Mean {flat.mean():.3f}')
+        ax.axvline(np.median(flat),   color='orange', linestyle='--', lw=2, label=f'Median {np.median(flat):.3f}')
+        ax.set(xlabel='Confidence', ylabel='Frequency', title='Prediction Confidence Distribution')
+        ax.legend(); ax.grid(alpha=.3)
+        plt.tight_layout()
+        fig.savefig(output_dir / 'confidence_histogram.png', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  ✓ Saved confidence maps + histogram")
+
+    return confidence_maps
