@@ -7,48 +7,60 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from sklearn.model_selection import KFold
-from sklearn.metrics import (
-    accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
-)
+from sklearn.metrics import (accuracy_score, f1_score, precision_score, recall_score, confusion_matrix)
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
 import copy, json, time
-
+import torch.nn.functional as F
 from vit import ViTFloodClassifier, get_model_summary
 from dataset import create_complete_dataset
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
 PATCH_SIZE  = 4
-EMBED_DIM   = 128
-NUM_HEADS   = 4
-NUM_LAYERS  = 3
-BATCH_SIZE  = 1024
-NUM_EPOCHS  = 20
-NUM_FOLDS   = 3
+EMBED_DIM   = 256         
+NUM_HEADS   = 8          
+NUM_LAYERS  = 4            
+BATCH_SIZE  = 1024         
+NUM_EPOCHS  = 100          
+NUM_FOLDS   = 2           
 LR          = 3e-4
 
-WEIGHT_DECAY   = 1e-4
-GRAD_CLIP_NORM = 1.0
-NUM_CLASSES    = 5
-OUTPUT_DIR     = Path('./outputs')
-CLASS_NAMES    = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
+WEIGHT_DECAY      = 1e-4
+GRAD_CLIP_NORM    = 1.0
+NUM_CLASSES       = 5
+OUTPUT_DIR        = Path('./outputs')
+CLASS_NAMES       = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
+LOSS_TYPE         = 'ce'       
+FOCAL_GAMMA       = 2.0      
+LABEL_SMOOTHING   = 0.0        
+WEIGHT_POWER      = 0.5        
+CHECKPOINT_METRIC = 'macro_f1' 
 
 DEVICE  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 USE_AMP = DEVICE.type == 'cuda'
 
-# ─────────────────────────────────────────────
-# DATASET
-# ─────────────────────────────────────────────
+
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma: float = 2.0, label_smoothing: float = 0.0):
+        super().__init__()
+        self.weight          = weight
+        self.gamma           = gamma
+        self.label_smoothing = label_smoothing
+
+    def forward(self, inputs, targets):
+        ce  = F.cross_entropy(inputs, targets, weight=self.weight,
+                              label_smoothing=self.label_smoothing, reduction='none')
+        p_t = torch.exp(-ce)
+        return (((1 - p_t) ** self.gamma) * ce).mean()
+
+
 class FloodPatchDataset(Dataset):
     def __init__(self, X_spatial: np.ndarray, y_labels: np.ndarray, rainfall: np.ndarray):
-        assert X_spatial.shape[0] == rainfall.shape[0] == y_labels.shape[0],             f"Length mismatch: spatial={X_spatial.shape[0]}, rainfall={rainfall.shape[0]}, labels={y_labels.shape[0]}"
+        assert X_spatial.shape[0] == rainfall.shape[0] == y_labels.shape[0], f"Length mismatch: spatial={X_spatial.shape[0]}, rainfall={rainfall.shape[0]}, labels={y_labels.shape[0]}"
 
-        self.X    = torch.tensor(X_spatial, dtype=torch.float32)  # (N, C, H, W)
-        self.y    = torch.tensor(y_labels,  dtype=torch.long)     # (N,)
-        self.rain = torch.tensor(rainfall,  dtype=torch.float32)  # (N, T)
+        self.X    = torch.tensor(X_spatial, dtype=torch.float32)  
+        self.y    = torch.tensor(y_labels,  dtype=torch.long)     
+        self.rain = torch.tensor(rainfall,  dtype=torch.float32)  
 
         print(f"[FloodPatchDataset]  {len(self):,} samples")
         print(f"  Spatial : {tuple(self.X.shape)}")
@@ -62,10 +74,6 @@ class FloodPatchDataset(Dataset):
         return self.X[idx], self.rain[idx], self.y[idx]
 
 
-
-# ─────────────────────────────────────────────
-# MODEL FACTORY
-# ─────────────────────────────────────────────
 def make_model() -> nn.Module:
     return ViTFloodClassifier(
         spatial_channels  = 3,
@@ -84,26 +92,28 @@ def make_model() -> nn.Module:
     )
 
 
-# ─────────────────────────────────────────────
-# CLASS WEIGHTS
-# ─────────────────────────────────────────────
-def compute_class_weights(y: np.ndarray) -> torch.Tensor:
+
+def compute_class_weights(y: np.ndarray, power: float = WEIGHT_POWER) -> torch.Tensor:
+    """
+    power=1.0 → full inverse-frequency
+    power=0.5 → sqrt of inverse-frequency 
+    power=0.0 → uniform weights
+    """
     flat  = y.flatten()
     flat  = flat[flat >= 0]
     total = len(flat)
     weights = np.zeros(NUM_CLASSES, dtype=np.float32)
-    print("\nClass weights (inverse frequency):")
+    print(f"\nClass weights (power={power}):")
     for c in range(NUM_CLASSES):
         count      = (flat == c).sum()
-        weights[c] = total / (NUM_CLASSES * count) if count > 0 else 0.0
+        inv        = total / (NUM_CLASSES * count) if count > 0 else 0.0
+        weights[c] = inv ** power
         print(f"  Class {c} ({CLASS_NAMES[c]:10s}): {count/total*100:5.2f}%  →  weight {weights[c]:.4f}")
     weights = weights / weights.sum() * NUM_CLASSES
     return torch.tensor(weights, dtype=torch.float32)
 
 
-# ─────────────────────────────────────────────
-# METRICS
-# ─────────────────────────────────────────────
+
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
     m = {
         'accuracy'   : accuracy_score(y_true, y_pred),
@@ -137,20 +147,12 @@ def print_metrics(m: Dict, split: str = 'Validation'):
         print(f"  {n:<12} {m[f'precision_{n}']:>8.4f} {m[f'recall_{n}']:>8.4f} {m[f'f1_{n}']:>8.4f}")
 
 
-# ─────────────────────────────────────────────
-# SINGLE EPOCH
-# ─────────────────────────────────────────────
-def run_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: Optional[optim.Optimizer],
-    scaler,
-    is_train: bool = True,
-) -> Tuple[float, float]:
+
+def run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimizer: Optional[optim.Optimizer], scaler, is_train: bool = True) -> Tuple[float, float]:
     model.train() if is_train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
-    n_batches = len(loader)
+    n_batches  = len(loader)
+    all_preds, all_labels = [], []  
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     with ctx:
@@ -179,30 +181,41 @@ def run_epoch(
                     optimizer.step()
 
             total_loss += loss.item() * labels.size(0)
-            correct    += (logits.argmax(1) == labels).sum().item()
+            preds_batch = logits.argmax(1)
+            correct    += (preds_batch == labels).sum().item()
             total      += labels.size(0)
+            if not is_train:
+                all_preds.extend(preds_batch.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
 
             if (i + 1) % 500 == 0 or (i + 1) == n_batches:
                 tag = "TRAIN" if is_train else "VAL  "
                 print(f"    [{tag}] {i+1:>5}/{n_batches}  "
                       f"loss={total_loss/total:.4f}  acc={correct/total:.4f}")
 
-    return total_loss / total, correct / total
+    avg_loss = total_loss / total
+    avg_acc  = correct / total
+
+    if not is_train:
+        from sklearn.metrics import f1_score as _f1
+        macro_f1 = _f1(all_labels, all_preds, average='macro', zero_division=0)
+        return avg_loss, avg_acc, macro_f1
+
+    return avg_loss, avg_acc, None  
 
 
-# ─────────────────────────────────────────────
-# K-FOLD TRAINING
-# ─────────────────────────────────────────────
-def train_kfold(
-    full_dataset: FloodPatchDataset,
-    y_train: np.ndarray,
-) -> Tuple[List[Dict], int]:
+def train_kfold(full_dataset: FloodPatchDataset, y_train: np.ndarray) -> Tuple[List[Dict], int]:
 
     (OUTPUT_DIR / 'checkpoints').mkdir(parents=True, exist_ok=True)
     (OUTPUT_DIR / 'logs').mkdir(parents=True, exist_ok=True)
 
     class_weights = compute_class_weights(y_train).to(DEVICE)
-    criterion     = nn.CrossEntropyLoss(weight=class_weights)
+    if LOSS_TYPE == 'focal':
+        criterion = FocalLoss(weight=class_weights, gamma=FOCAL_GAMMA, label_smoothing=LABEL_SMOOTHING)
+        print(f"  Loss: FocalLoss(gamma={FOCAL_GAMMA})")
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=LABEL_SMOOTHING)
+        print(f"  Loss: Weighted CrossEntropyLoss (WEIGHT_POWER={WEIGHT_POWER})")
 
     kf      = KFold(n_splits=NUM_FOLDS, shuffle=True, random_state=42)
     indices = np.arange(len(full_dataset))
@@ -218,15 +231,18 @@ def train_kfold(
         print(f"  Val  : {len(val_idx):,} samples")
         print(f"{'='*60}")
 
+        _nw = 0 if __import__('sys').platform == 'win32' else 2
         train_loader = DataLoader(
             full_dataset, batch_size=BATCH_SIZE,
             sampler=SubsetRandomSampler(train_idx),
-            num_workers=2, pin_memory=DEVICE.type == 'cuda',
+            num_workers=_nw, pin_memory=DEVICE.type == 'cuda',
+            persistent_workers=(_nw > 0),
         )
         val_loader = DataLoader(
             full_dataset, batch_size=BATCH_SIZE,
             sampler=SubsetRandomSampler(val_idx),
-            num_workers=2, pin_memory=DEVICE.type == 'cuda',
+            num_workers=_nw, pin_memory=DEVICE.type == 'cuda',
+            persistent_workers=(_nw > 0),
         )
 
         model     = make_model().to(DEVICE)
@@ -240,26 +256,28 @@ def train_kfold(
 
         for epoch in range(NUM_EPOCHS):
             t0 = time.time()
-            tr_loss, tr_acc = run_epoch(model, train_loader, criterion, optimizer, scaler, is_train=True)
-            vl_loss, vl_acc = run_epoch(model, val_loader,   criterion, None,      None,   is_train=False)
+            tr_loss, tr_acc, _ = run_epoch(model, train_loader, criterion, optimizer, scaler, is_train=True)
+            vl_loss, vl_acc, vl_f1 = run_epoch(model, val_loader, criterion, None, None, is_train=False)
             scheduler.step()
 
             history['train_loss'].append(tr_loss)
             history['train_acc'].append(tr_acc)
             history['val_loss'].append(vl_loss)
             history['val_acc'].append(vl_acc)
+            history['val_f1'].append(vl_f1)
 
             print(f"  Epoch {epoch+1:2d}/{NUM_EPOCHS} ({time.time()-t0:.0f}s)  "
                   f"train loss={tr_loss:.4f}  acc={tr_acc:.4f}  "
-                  f"val loss={vl_loss:.4f}  acc={vl_acc:.4f}")
+                  f"val loss={vl_loss:.4f}  acc={vl_acc:.4f}  macro_f1={vl_f1:.4f}")
 
-            if vl_acc > best_val_acc_fold:
-                best_val_acc_fold = vl_acc
+            monitor = vl_f1 if CHECKPOINT_METRIC == 'macro_f1' else vl_acc
+            if monitor > best_val_acc_fold:
+                best_val_acc_fold = monitor
                 best_state        = copy.deepcopy(model.state_dict())
 
         torch.save(
             {'fold': fold+1, 'model_state_dict': best_state, 'best_val_acc': best_val_acc_fold},
-            OUTPUT_DIR / 'checkpoints' / f'fold_{fold+1}_best.pth',
+            OUTPUT_DIR / 'checkpoints' / f'fold_{fold+1}_best.pth',  # keyed by CHECKPOINT_METRIC
         )
 
         history['best_val_acc'] = best_val_acc_fold
@@ -272,8 +290,9 @@ def train_kfold(
             best_val_acc  = best_val_acc_fold
             best_fold_idx = fold
 
+    metric_label = 'macro_f1' if CHECKPOINT_METRIC == 'macro_f1' else 'val_acc'
     print(f"\n{'='*60}")
-    print(f"K-FOLD COMPLETE  |  Best fold: {best_fold_idx+1}  |  Best val acc: {best_val_acc:.4f}")
+    print(f"K-FOLD COMPLETE  |  Best fold: {best_fold_idx+1}  |  Best {metric_label}: {best_val_acc:.4f}")
     print(f"{'='*60}")
 
     # Save fold histories (skip state dicts — too large for JSON)
