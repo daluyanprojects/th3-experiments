@@ -10,6 +10,7 @@ from typing import Dict, List, Tuple
 from collections import defaultdict
 from imblearn.over_sampling import SMOTE
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import f1_score
 
 class CombinedLoss(nn.Module):    
     def __init__(self, class_weights):
@@ -40,7 +41,6 @@ def calculate_class_weights(labels: np.ndarray) -> torch.Tensor:
 def create_optimizer(model: nn.Module) -> optim.Optimizer:
     return optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.05, betas=(0.9, 0.999))
 
-
 class WarmupCosineScheduler:
     def __init__(self, optimizer, warmup_epochs: int, total_epochs: int):
         self.optimizer = optimizer
@@ -62,7 +62,6 @@ class WarmupCosineScheduler:
         
         self.current_epoch += 1
         return lr
-
 
 class EarlyStopping:
     def __init__(self, patience: int):
@@ -136,6 +135,8 @@ def validate(model, loader, criterion, device):
     total_loss = 0
     correct = 0
     total = 0
+    all_preds = []
+    all_labels = []
     
     with torch.no_grad():
         for spatial, rainfall, labels in loader:
@@ -150,8 +151,13 @@ def validate(model, loader, criterion, device):
             pred = logits.argmax(dim=1)
             correct += (pred == labels).sum().item()
             total += labels.size(0)
+            
+            all_preds.extend(pred.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
     
-    return total_loss / len(loader), correct / total
+    macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    
+    return total_loss / len(loader), correct / total, macro_f1
 
 
 def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: int, device: str):
@@ -159,7 +165,6 @@ def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: i
     print(f"FOLD {fold_idx + 1}")
     print(f"{'='*70}")
     
-    # Get class weights
     train_dataset = train_loader.dataset
     if hasattr(train_dataset, 'dataset'):
         base_dataset = train_dataset.dataset
@@ -176,43 +181,38 @@ def train_one_fold(model, train_loader, val_loader, fold_idx: int, num_epochs: i
         pct = 100 * count / len(train_labels)
         print(f"  Class {i}: {count:>6,} ({pct:>5.2f}%) weight={class_weights[i]:.3f}")
     
-    # Setup
     criterion = CombinedLoss(class_weights=class_weights)
     optimizer = create_optimizer(model)
     scheduler = WarmupCosineScheduler(optimizer, warmup_epochs=10, total_epochs=num_epochs)
-    early_stop = EarlyStopping(patience=5)
     
-    best_val_loss = float('inf')
-    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'lr': []}
+    best_macro_f1 = -1.0 
+    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'val_macro_f1': [], 'lr': []}
     
-    # Training loop
     for epoch in range(num_epochs):
         lr = scheduler.step()
         
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        val_loss, val_acc, val_macro_f1 = validate(model, val_loader, criterion, device)
         
         history['train_loss'].append(train_loss)
         history['train_acc'].append(train_acc)
         history['val_loss'].append(val_loss)
         history['val_acc'].append(val_acc)
+        history['val_macro_f1'].append(val_macro_f1)
         history['lr'].append(lr)
         
         print(f"Epoch {epoch+1:3d}/{num_epochs} | LR:{lr:.6f} | "
               f"Train Loss:{train_loss:.4f} Acc:{train_acc:.4f} | "
-              f"Val Loss:{val_loss:.4f} Acc:{val_acc:.4f}")
+              f"Val Loss:{val_loss:.4f} Acc:{val_acc:.4f} | "
+              f"Val F1:{val_macro_f1:.4f}")
         
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_macro_f1 > best_macro_f1:
+            best_macro_f1 = val_macro_f1
             best_model_state = model.state_dict().copy()
-            print(f"  → Best!")
-        
-        if early_stop(val_loss):
-            print(f"Early stopping at epoch {epoch+1}")
-            break
+            print(f"  → Best Macro F1: {best_macro_f1:.4f}")
     
     model.load_state_dict(best_model_state)
-    return history, best_val_loss
+    return history, best_macro_f1 
 
 
 def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size, num_epochs, device, num_folds):
@@ -229,7 +229,7 @@ def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size, nu
         print(f"  Val: {sorted(val_scen)}")
     
     fold_histories = []
-    fold_best_losses = []
+    fold_best_f1s = []
     
     for fold_idx, (train_scenarios, val_scenarios) in enumerate(folds):
         train_indices = []
@@ -242,18 +242,18 @@ def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size, nu
         
         print(f"\nFold {fold_idx + 1}: {len(train_indices):,} train, {len(val_indices):,} val")
         
-        train_dataset = Subset(full_dataset, train_indices)
+        train_subset = Subset(full_dataset, train_indices)
         val_subset = Subset(full_dataset, val_indices)
         
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, num_workers=0)
         val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, num_workers=0)
         
         model = model_factory().to(device)
         
-        history, best_val_loss = train_one_fold(model, train_loader, val_loader, fold_idx, num_epochs, device)
+        history, best_macro_f1 = train_one_fold(model, train_loader, val_loader, fold_idx, num_epochs, device)
         
         fold_histories.append(history)
-        fold_best_losses.append(best_val_loss)
+        fold_best_f1s.append(best_macro_f1)
         
         save_dir = Path(f'./checkpoints/fold_{fold_idx + 1}')
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -262,16 +262,16 @@ def train_kfold(model_factory, full_dataset, scenario_to_samples, batch_size, nu
         with open(save_dir / 'history.json', 'w') as f:
             json.dump(history, f, indent=2)
     
-    best_fold = np.argmin(fold_best_losses)
+    best_fold = np.argmax(fold_best_f1s) 
     
     print("\n" + "="*70)
     print("SUMMARY")
     print("="*70)
-    for i, loss in enumerate(fold_best_losses):
+    for i, f1 in enumerate(fold_best_f1s):
         marker = " ← BEST" if i == best_fold else ""
-        print(f"Fold {i+1}: {loss:.4f}{marker}")
+        print(f"Fold {i+1}: {f1:.4f}{marker}")
     
-    print(f"\nAverage: {np.mean(fold_best_losses):.4f} ± {np.std(fold_best_losses):.4f}")
+    print(f"\nAverage: {np.mean(fold_best_f1s):.4f} ± {np.std(fold_best_f1s):.4f}")
     print("="*70)
     
     return fold_histories, best_fold

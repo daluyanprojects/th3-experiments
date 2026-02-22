@@ -49,66 +49,13 @@ def update_dataset_info(spatial_patches, train_dataset, test_dataset, train_data
           f"patch_size={DATASET_INFO['patch_size']}, "
           f"timesteps={DATASET_INFO['rainfall_timesteps']}")
 
-# =============================================================================
-# MODEL CONFIGURATIONS
-# =============================================================================
-
-CONFIG_TINY = {
-    'name':            'Tiny ViT',
-    'embed_dim':       128,
-    'num_layers':      4,
-    'num_heads':       4,
-    'mlp_ratio':       4.0,
-    'dropout':         0.1,
-    'rainfall_method': 'conv',
-}
-
-CONFIG_SMALL = {
-    'name':            'Small ViT',
-    'embed_dim':       256,
-    'num_layers':      6,
-    'num_heads':       8,
-    'mlp_ratio':       4.0,
-    'dropout':         0.1,
-    'rainfall_method': 'conv',
-}
-
-CONFIG_MEDIUM = {
-    'name':            'Medium ViT',
-    'embed_dim':       384,
-    'num_layers':      8,
-    'num_heads':       8,
-    'mlp_ratio':       4.0,
-    'dropout':         0.15,
-    'rainfall_method': 'conv',
-}
 
 CONFIG_BASE = {
     'name':            'Base ViT',
-    'embed_dim':       512,
-    'num_layers':      12,
-    'num_heads':       8,
-    'mlp_ratio':       4.0,
-    'dropout':         0.2,
-    'rainfall_method': 'conv',
-}
-
-CONFIG_SMALL_REGULARIZED = {
-    'name':            'Small ViT (Regularized)',
     'embed_dim':       256,
-    'num_layers':      6,
+    'num_layers':      4,
     'num_heads':       8,
-    'mlp_ratio':       4.0,
-    'dropout':         0.25,
-    'rainfall_method': 'conv',
-}
-
-CONFIG_COMPACT = {
-    'name':            'Compact ViT',
-    'embed_dim':       192,
-    'num_layers':      6,
-    'num_heads':       6,
-    'mlp_ratio':       4.0,
+    'mlp_ratio':       2.0,
     'dropout':         0.1,
     'rainfall_method': 'conv',
 }
@@ -130,24 +77,8 @@ def create_model_from_config(config: Dict[str, Any], **override_kwargs) -> ViTFl
     model_params.update(override_kwargs)
     return ViTFloodClassifier(**model_params)
 
-def create_tiny_model(**kwargs)              -> ViTFloodClassifier:
-    return create_model_from_config(CONFIG_TINY, **kwargs)
-
-def create_small_model(**kwargs)             -> ViTFloodClassifier:
-    return create_model_from_config(CONFIG_SMALL, **kwargs)
-
-def create_medium_model(**kwargs)            -> ViTFloodClassifier:
-    return create_model_from_config(CONFIG_MEDIUM, **kwargs)
-
 def create_base_model(**kwargs)              -> ViTFloodClassifier:
     return create_model_from_config(CONFIG_BASE, **kwargs)
-
-def create_compact_model(**kwargs)           -> ViTFloodClassifier:
-    return create_model_from_config(CONFIG_COMPACT, **kwargs)
-
-def create_small_regularized_model(**kwargs) -> ViTFloodClassifier:
-    return create_model_from_config(CONFIG_SMALL_REGULARIZED, **kwargs)
-
 
 def compare_all_configurations():
     ch = DATASET_INFO['channels']
@@ -165,10 +96,7 @@ def compare_all_configurations():
     print(f"  Test samples   : {DATASET_INFO['test_samples']:,}")
     print("="*95)
 
-    configs = [
-        CONFIG_TINY, CONFIG_COMPACT, CONFIG_SMALL,
-        CONFIG_SMALL_REGULARIZED, CONFIG_MEDIUM, CONFIG_BASE
-    ]
+    configs = [CONFIG_BASE]
 
     print(f"\n{'Config':<30} {'Params':>12}  {'Embed':<8} "
           f"{'Layers':<8} {'Heads':<8} {'Rain':<10} {'Dropout'}")
