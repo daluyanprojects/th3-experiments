@@ -21,8 +21,8 @@ EMBED_DIM   = 256
 NUM_HEADS   = 8          
 NUM_LAYERS  = 4            
 BATCH_SIZE  = 1024         
-NUM_EPOCHS  = 100          
-NUM_FOLDS   = 2           
+NUM_EPOCHS  = 50          
+NUM_FOLDS   = 5           
 LR          = 3e-4
 
 WEIGHT_DECAY      = 1e-4

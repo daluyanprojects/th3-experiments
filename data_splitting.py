@@ -28,7 +28,7 @@ def split_spatial_data(
     print("    • Spatially complementary (non-overlapping)")
     print()
     print("  Split Strategy:")
-    print("    • All 20 scenarios used for BOTH regions")
+    print("    • All 50 scenarios used for BOTH regions")
     print("    • Training scenarios → GMM patches")
     print("    • Testing scenarios → Manila patches")
     

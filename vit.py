@@ -13,7 +13,7 @@ class RainfallSequenceEmbedding(nn.Module):
         num_timesteps: int,
         embed_dim: int , 
         hidden_dim: int,
-        method: str  # 'conv', 'mlp', or 'attention'
+        method: str 
     ):
         super().__init__()
         
@@ -87,12 +87,6 @@ class SpatialPatchEmbedding(nn.Module):
             self.projection = nn.Linear(in_channels * patch_size * patch_size, embed_dim)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (batch, 3, 16, 16) spatial patch
-        Returns:
-            (batch, 1, embed_dim) single patch token
-        """
         
         if self.method == 'conv':
             # (batch, 3, 16, 16) -> (batch, embed_dim, 1, 1)
@@ -191,9 +185,7 @@ class ViTFloodClassifier(nn.Module):
         self.pooling_method = pooling_method
         self.rainfall_timesteps = rainfall_timesteps
         
-        # =====================================================================
-        # A. SPATIAL PATCH EMBEDDING
-        # =====================================================================
+        
         self.spatial_embedding = SpatialPatchEmbedding(
             in_channels=spatial_channels,
             patch_size=spatial_patch_size,
@@ -201,9 +193,6 @@ class ViTFloodClassifier(nn.Module):
             method=spatial_method
         )
         
-        # =====================================================================
-        # B. RAINFALL SEQUENCE EMBEDDING
-        # =====================================================================
         self.rainfall_embedding = RainfallSequenceEmbedding(
             num_timesteps=rainfall_timesteps,
             embed_dim=embed_dim,
@@ -211,17 +200,11 @@ class ViTFloodClassifier(nn.Module):
             method=rainfall_method
         )
         
-        # =====================================================================
-        # D. POSITIONAL ENCODING (2 tokens: rainfall + patch)
-        # =====================================================================
         if learnable_pos_enc:
             self.pos_embedding = nn.Parameter(torch.randn(1, 2, embed_dim) * 0.02)
         else:
             self.register_buffer('pos_embedding', self._sinusoidal_embedding(2, embed_dim))
         
-        # =====================================================================
-        # E. TRANSFORMER ENCODER
-        # =====================================================================
         self.transformer_blocks = nn.ModuleList([
             TransformerBlock(
                 embed_dim=embed_dim,
@@ -234,9 +217,6 @@ class ViTFloodClassifier(nn.Module):
         
         self.norm = nn.LayerNorm(embed_dim)
         
-        # =====================================================================
-        # F. CLASSIFICATION HEAD
-        # =====================================================================
         self.classifier = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
             nn.GELU(),
