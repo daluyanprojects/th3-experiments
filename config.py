@@ -21,7 +21,7 @@ class ModelConfig:
 class TrainConfig:
     batch_size:       int   = 1024
     num_epochs:       int   = 50
-    num_folds:        int   = 10
+    num_folds:        int   = 5
     lr:               float = 3e-4
     weight_decay:     float = 1e-4
     num_classes:      int   = 5
