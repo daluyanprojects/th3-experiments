@@ -265,7 +265,7 @@ def _verify_split(train_data: Dict, test_data: Dict, train_scenario_ids: List[in
     
     # Check 2: All scenarios accounted for
     all_scenarios = sorted(train_scenario_ids + test_scenario_ids)
-    expected_scenarios = list(range(1, 21))
+    expected_scenarios = list(range(1, 51))
     all_accounted = all_scenarios == expected_scenarios
     print(f"  All scenarios accounted: {'✓' if all_accounted else '✗'}")
     checks['all_scenarios_accounted'] = all_accounted
@@ -316,57 +316,3 @@ def _verify_split(train_data: Dict, test_data: Dict, train_scenario_ids: List[in
     checks['all_passed'] = all(checks.values())
     
     return checks
-
-
-
-def visualize_split_distribution(results: Dict, figsize=(15, 5)):    
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
-    
-    # Plot 1: Scenario assignment
-    ax1 = axes[0]
-    train_ids = results['metadata']['train_scenario_ids']
-    test_ids = results['metadata']['test_scenario_ids']
-    
-    all_ids = list(range(1, 21))
-    colors = ['#2196F3' if i in train_ids else '#FF9800' for i in all_ids]
-    
-    ax1.bar(all_ids, [1]*20, color=colors, edgecolor='black', linewidth=1.5)
-    ax1.set_xlabel('Scenario ID', fontweight='bold')
-    ax1.set_ylabel('Assignment', fontweight='bold')
-    ax1.set_title('Scenario Assignment', fontweight='bold')
-    ax1.set_xticks(all_ids)
-    ax1.legend(['Train', 'Test'], loc='upper right')
-    ax1.grid(axis='y', alpha=0.3)
-    
-    # Plot 2: Class distribution (Train)
-    ax2 = axes[1]
-    train_labels = results['train']['labels']
-    unique, counts = np.unique(train_labels, return_counts=True)
-    
-    colors_train = ['#2E7D32', '#FDD835', '#FB8C00', '#E53935', '#6A1B9A']
-    ax2.bar(unique, counts, color=[colors_train[i] for i in unique], 
-            edgecolor='black', linewidth=1.5)
-    ax2.set_xlabel('Class', fontweight='bold')
-    ax2.set_ylabel('Count', fontweight='bold')
-    ax2.set_title('Train Class Distribution (GMM)', fontweight='bold')
-    ax2.set_xticks(range(5))
-    ax2.set_xticklabels(['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme'], rotation=45)
-    ax2.grid(axis='y', alpha=0.3)
-    
-    # Plot 3: Class distribution (Test)
-    ax3 = axes[2]
-    test_labels = results['test']['labels']
-    unique, counts = np.unique(test_labels, return_counts=True)
-    
-    ax3.bar(unique, counts, color=[colors_train[i] for i in unique],
-            edgecolor='black', linewidth=1.5)
-    ax3.set_xlabel('Class', fontweight='bold')
-    ax3.set_ylabel('Count', fontweight='bold')
-    ax3.set_title('Test Class Distribution (Manila)', fontweight='bold')
-    ax3.set_xticks(range(5))
-    ax3.set_xticklabels(['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme'], rotation=45)
-    ax3.grid(axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    
-    return fig

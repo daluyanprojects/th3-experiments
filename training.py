@@ -1,3 +1,5 @@
+# training.py
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,38 +9,21 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from sklearn.model_selection import KFold
-from sklearn.metrics import (accuracy_score, f1_score, precision_score, recall_score, confusion_matrix)
+from sklearn.metrics import (accuracy_score, f1_score, precision_score, 
+                              recall_score, confusion_matrix)
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
-import copy, json, time
+import copy, json, time, sys
 import torch.nn.functional as F
-from vit import ViTFloodClassifier, get_model_summary
-from dataset import create_complete_dataset
 
-PATCH_SIZE  = 4
-EMBED_DIM   = 256         
-NUM_HEADS   = 8          
-NUM_LAYERS  = 4            
-BATCH_SIZE  = 1024         
-NUM_EPOCHS  = 50          
-NUM_FOLDS   = 5           
-LR          = 3e-4
-
-WEIGHT_DECAY      = 1e-4
-GRAD_CLIP_NORM    = 1.0
-NUM_CLASSES       = 5
-OUTPUT_DIR        = Path('./outputs')
-CLASS_NAMES       = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
-LOSS_TYPE         = 'ce'       
-FOCAL_GAMMA       = 2.0      
-LABEL_SMOOTHING   = 0.0        
-WEIGHT_POWER      = 0.5        
-CHECKPOINT_METRIC = 'macro_f1' 
+from vit import ViTFloodClassifier
+from config import TrainConfig
 
 DEVICE  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 USE_AMP = DEVICE.type == 'cuda'
 
+CLASS_NAMES = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
 
 class FocalLoss(nn.Module):
     def __init__(self, weight=None, gamma: float = 2.0, label_smoothing: float = 0.0):
@@ -53,15 +38,12 @@ class FocalLoss(nn.Module):
         p_t = torch.exp(-ce)
         return (((1 - p_t) ** self.gamma) * ce).mean()
 
-
 class FloodPatchDataset(Dataset):
     def __init__(self, X_spatial: np.ndarray, y_labels: np.ndarray, rainfall: np.ndarray):
-        assert X_spatial.shape[0] == rainfall.shape[0] == y_labels.shape[0], f"Length mismatch: spatial={X_spatial.shape[0]}, rainfall={rainfall.shape[0]}, labels={y_labels.shape[0]}"
-
-        self.X    = torch.tensor(X_spatial, dtype=torch.float32)  
-        self.y    = torch.tensor(y_labels,  dtype=torch.long)     
-        self.rain = torch.tensor(rainfall,  dtype=torch.float32)  
-
+        assert X_spatial.shape[0] == rainfall.shape[0] == y_labels.shape[0]
+        self.X    = torch.tensor(X_spatial, dtype=torch.float32)
+        self.y    = torch.tensor(y_labels,  dtype=torch.long)
+        self.rain = torch.tensor(rainfall,  dtype=torch.float32)
         print(f"[FloodPatchDataset]  {len(self):,} samples")
         print(f"  Spatial : {tuple(self.X.shape)}")
         print(f"  Rainfall: {tuple(self.rain.shape)}")
@@ -74,44 +56,46 @@ class FloodPatchDataset(Dataset):
         return self.X[idx], self.rain[idx], self.y[idx]
 
 
-def make_model() -> nn.Module:
+def make_model(cfg: TrainConfig) -> nn.Module:
     return ViTFloodClassifier(
-        spatial_channels  = 3,
-        spatial_patch_size= PATCH_SIZE,
-        rainfall_timesteps= 13,
-        num_classes       = NUM_CLASSES,
-        embed_dim         = EMBED_DIM,
-        num_layers        = NUM_LAYERS,
-        num_heads         = NUM_HEADS,
-        mlp_ratio         = 2.0,
-        dropout           = 0.1,
-        rainfall_method   = 'conv',
-        spatial_method    = 'conv',
-        pooling_method    = 'mean',
-        learnable_pos_enc = True,
+        spatial_channels   = cfg.spatial_channels,
+        spatial_patch_size = cfg.patch_size,
+        rainfall_timesteps = cfg.rainfall_timesteps,
+        num_classes        = cfg.num_classes,
+        embed_dim          = cfg.embed_dim,
+        num_layers         = cfg.num_layers,
+        num_heads          = cfg.num_heads,
+        mlp_ratio          = cfg.mlp_ratio,
+        dropout            = cfg.dropout,
+        rainfall_method    = cfg.rainfall_method,
+        spatial_method     = cfg.spatial_method,
+        pooling_method     = cfg.pooling_method,
+        learnable_pos_enc  = cfg.learnable_pos_enc,
     )
 
-
-
-def compute_class_weights(y: np.ndarray, power: float = WEIGHT_POWER) -> torch.Tensor:
-    """
-    power=1.0 → full inverse-frequency
-    power=0.5 → sqrt of inverse-frequency 
-    power=0.0 → uniform weights
-    """
-    flat  = y.flatten()
-    flat  = flat[flat >= 0]
-    total = len(flat)
-    weights = np.zeros(NUM_CLASSES, dtype=np.float32)
-    print(f"\nClass weights (power={power}):")
-    for c in range(NUM_CLASSES):
+def compute_class_weights(y: np.ndarray, cfg: TrainConfig) -> torch.Tensor:
+    flat   = y.flatten()
+    flat   = flat[flat >= 0]
+    total  = len(flat)
+    weights = np.zeros(cfg.num_classes, dtype=np.float32)
+    print(f"\nClass weights (power={cfg.weight_power}):")
+    for c in range(cfg.num_classes):
         count      = (flat == c).sum()
-        inv        = total / (NUM_CLASSES * count) if count > 0 else 0.0
-        weights[c] = inv ** power
+        inv        = total / (cfg.num_classes * count) if count > 0 else 0.0
+        weights[c] = inv ** cfg.weight_power
         print(f"  Class {c} ({CLASS_NAMES[c]:10s}): {count/total*100:5.2f}%  →  weight {weights[c]:.4f}")
-    weights = weights / weights.sum() * NUM_CLASSES
+    weights = weights / weights.sum() * cfg.num_classes
     return torch.tensor(weights, dtype=torch.float32)
 
+
+def build_criterion(cfg: TrainConfig, class_weights: torch.Tensor) -> nn.Module:
+    w = class_weights.to(DEVICE)
+    if cfg.loss_type == 'focal':
+        print(f"  Loss: FocalLoss(gamma={cfg.focal_gamma}, label_smoothing={cfg.label_smoothing})")
+        return FocalLoss(weight=w, gamma=cfg.focal_gamma, label_smoothing=cfg.label_smoothing)
+    else:
+        print(f"  Loss: Weighted CrossEntropyLoss (weight_power={cfg.weight_power}, label_smoothing={cfg.label_smoothing})")
+        return nn.CrossEntropyLoss(weight=w, label_smoothing=cfg.label_smoothing)
 
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
@@ -147,12 +131,20 @@ def print_metrics(m: Dict, split: str = 'Validation'):
         print(f"  {n:<12} {m[f'precision_{n}']:>8.4f} {m[f'recall_{n}']:>8.4f} {m[f'f1_{n}']:>8.4f}")
 
 
+def run_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    cfg: TrainConfig,
+    optimizer: Optional[optim.Optimizer] = None,
+    scaler=None,
+    is_train: bool = True,
+) -> Tuple[float, float, Optional[float]]:
 
-def run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimizer: Optional[optim.Optimizer], scaler, is_train: bool = True) -> Tuple[float, float]:
     model.train() if is_train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
-    n_batches  = len(loader)
-    all_preds, all_labels = [], []  
+    n_batches = len(loader)
+    all_preds, all_labels = [], []
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     with ctx:
@@ -168,7 +160,7 @@ def run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimi
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
+                nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -177,7 +169,7 @@ def run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimi
                 if is_train:
                     optimizer.zero_grad()
                     loss.backward()
-                    nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
+                    nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
                     optimizer.step()
 
             total_loss += loss.item() * labels.size(0)
@@ -195,69 +187,67 @@ def run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimi
 
     avg_loss = total_loss / total
     avg_acc  = correct / total
-
+    macro_f1 = None
     if not is_train:
-        from sklearn.metrics import f1_score as _f1
-        macro_f1 = _f1(all_labels, all_preds, average='macro', zero_division=0)
-        return avg_loss, avg_acc, macro_f1
+        macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
-    return avg_loss, avg_acc, None  
+    return avg_loss, avg_acc, macro_f1
 
 
-def train_kfold(full_dataset: FloodPatchDataset, y_train: np.ndarray) -> Tuple[List[Dict], int]:
+def train_kfold(
+    full_dataset: FloodPatchDataset,
+    y_train: np.ndarray,
+    cfg: TrainConfig,
+) -> Tuple[List[Dict], int]:
 
-    (OUTPUT_DIR / 'checkpoints').mkdir(parents=True, exist_ok=True)
-    (OUTPUT_DIR / 'logs').mkdir(parents=True, exist_ok=True)
+    ckpt_dir = cfg.output_dir / 'checkpoints'
+    log_dir  = cfg.output_dir / 'logs'
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    class_weights = compute_class_weights(y_train).to(DEVICE)
-    if LOSS_TYPE == 'focal':
-        criterion = FocalLoss(weight=class_weights, gamma=FOCAL_GAMMA, label_smoothing=LABEL_SMOOTHING)
-        print(f"  Loss: FocalLoss(gamma={FOCAL_GAMMA})")
-    else:
-        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=LABEL_SMOOTHING)
-        print(f"  Loss: Weighted CrossEntropyLoss (WEIGHT_POWER={WEIGHT_POWER})")
+    class_weights = compute_class_weights(y_train, cfg)
+    criterion     = build_criterion(cfg, class_weights)
 
-    kf      = KFold(n_splits=NUM_FOLDS, shuffle=True, random_state=42)
+    kf      = KFold(n_splits=cfg.num_folds, shuffle=True, random_state=42)
     indices = np.arange(len(full_dataset))
 
     fold_histories: List[Dict] = []
-    best_val_acc  = -1.0
-    best_fold_idx = 0
+    best_overall   = -1.0
+    best_fold_idx  = 0
+    _nw = 0 if sys.platform == 'win32' else 2
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(indices)):
         print(f"\n{'='*60}")
-        print(f"FOLD {fold+1} / {NUM_FOLDS}")
-        print(f"  Train: {len(train_idx):,} samples")
-        print(f"  Val  : {len(val_idx):,} samples")
+        print(f"FOLD {fold+1} / {cfg.num_folds}")
+        print(f"  Train: {len(train_idx):,}  |  Val: {len(val_idx):,}")
         print(f"{'='*60}")
 
-        _nw = 0 if __import__('sys').platform == 'win32' else 2
         train_loader = DataLoader(
-            full_dataset, batch_size=BATCH_SIZE,
+            full_dataset, batch_size=cfg.batch_size,
             sampler=SubsetRandomSampler(train_idx),
             num_workers=_nw, pin_memory=DEVICE.type == 'cuda',
             persistent_workers=(_nw > 0),
         )
         val_loader = DataLoader(
-            full_dataset, batch_size=BATCH_SIZE,
+            full_dataset, batch_size=cfg.batch_size,
             sampler=SubsetRandomSampler(val_idx),
             num_workers=_nw, pin_memory=DEVICE.type == 'cuda',
             persistent_workers=(_nw > 0),
         )
 
-        model     = make_model().to(DEVICE)
-        optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-        scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+        model     = make_model(cfg).to(DEVICE)
+        optimizer = optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        scheduler = CosineAnnealingLR(optimizer, T_max=cfg.num_epochs)
         scaler    = torch.amp.GradScaler('cuda') if USE_AMP else None
 
         history           = defaultdict(list)
-        best_val_acc_fold = -1.0
+        best_fold_monitor = -1.0
         best_state        = None
 
-        for epoch in range(NUM_EPOCHS):
+        for epoch in range(cfg.num_epochs):
             t0 = time.time()
-            tr_loss, tr_acc, _ = run_epoch(model, train_loader, criterion, optimizer, scaler, is_train=True)
-            vl_loss, vl_acc, vl_f1 = run_epoch(model, val_loader, criterion, None, None, is_train=False)
+            tr_loss, tr_acc, _      = run_epoch(model, train_loader, criterion, cfg, optimizer, scaler, is_train=True)
+            vl_loss, vl_acc, vl_f1  = run_epoch(model, val_loader,  criterion, cfg, is_train=False)
             scheduler.step()
 
             history['train_loss'].append(tr_loss)
@@ -266,49 +256,45 @@ def train_kfold(full_dataset: FloodPatchDataset, y_train: np.ndarray) -> Tuple[L
             history['val_acc'].append(vl_acc)
             history['val_f1'].append(vl_f1)
 
-            print(f"  Epoch {epoch+1:2d}/{NUM_EPOCHS} ({time.time()-t0:.0f}s)  "
+            print(f"  Epoch {epoch+1:2d}/{cfg.num_epochs} ({time.time()-t0:.0f}s)  "
                   f"train loss={tr_loss:.4f}  acc={tr_acc:.4f}  "
                   f"val loss={vl_loss:.4f}  acc={vl_acc:.4f}  macro_f1={vl_f1:.4f}")
 
-            monitor = vl_f1 if CHECKPOINT_METRIC == 'macro_f1' else vl_acc
-            if monitor > best_val_acc_fold:
-                best_val_acc_fold = monitor
+            monitor = vl_f1 if cfg.checkpoint_metric == 'macro_f1' else vl_acc
+            if monitor > best_fold_monitor:
+                best_fold_monitor = monitor
                 best_state        = copy.deepcopy(model.state_dict())
 
         torch.save(
-            {'fold': fold+1, 'model_state_dict': best_state, 'best_val_acc': best_val_acc_fold},
-            OUTPUT_DIR / 'checkpoints' / f'fold_{fold+1}_best.pth',  # keyed by CHECKPOINT_METRIC
+            {'fold': fold + 1, 'model_state_dict': best_state,
+             'best_monitor': best_fold_monitor, 'cfg': cfg},
+            ckpt_dir / f'fold_{fold+1}_best.pth',
         )
 
-        history['best_val_acc'] = best_val_acc_fold
-        history['best_state']   = best_state
+        history['best_val_monitor'] = best_fold_monitor
+        history['best_state']       = best_state
         fold_histories.append(dict(history))
+        print(f"\n  ✓ Fold {fold+1} best {cfg.checkpoint_metric}: {best_fold_monitor:.4f}")
 
-        print(f"\n  ✓ Fold {fold+1} best val acc: {best_val_acc_fold:.4f}")
-
-        if best_val_acc_fold > best_val_acc:
-            best_val_acc  = best_val_acc_fold
+        if best_fold_monitor > best_overall:
+            best_overall  = best_fold_monitor
             best_fold_idx = fold
 
-    metric_label = 'macro_f1' if CHECKPOINT_METRIC == 'macro_f1' else 'val_acc'
     print(f"\n{'='*60}")
-    print(f"K-FOLD COMPLETE  |  Best fold: {best_fold_idx+1}  |  Best {metric_label}: {best_val_acc:.4f}")
+    print(f"K-FOLD COMPLETE  |  Best fold: {best_fold_idx+1}  |  Best {cfg.checkpoint_metric}: {best_overall:.4f}")
     print(f"{'='*60}")
 
-    # Save fold histories (skip state dicts — too large for JSON)
     log = [{k: v for k, v in h.items() if k != 'best_state'} for h in fold_histories]
-    with open(OUTPUT_DIR / 'logs' / 'fold_histories.json', 'w') as f:
+    with open(log_dir / 'fold_histories.json', 'w') as f:
         json.dump(log, f, indent=2)
 
     return fold_histories, best_fold_idx
 
 
-# ─────────────────────────────────────────────
-# TEST EVALUATION
-# ─────────────────────────────────────────────
 @torch.no_grad()
-def evaluate(model: nn.Module, test_loader: DataLoader, split_name: str = 'Test') -> Dict:
-    log_dir = OUTPUT_DIR / 'logs'; log_dir.mkdir(parents=True, exist_ok=True)
+def evaluate(model: nn.Module, test_loader: DataLoader, cfg: TrainConfig, split_name: str = 'Test') -> Dict:
+    log_dir = cfg.output_dir / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
     model.eval()
     preds, trues, probs_list = [], [], []
 
@@ -319,7 +305,8 @@ def evaluate(model: nn.Module, test_loader: DataLoader, split_name: str = 'Test'
         preds.extend(logits.argmax(1).cpu().numpy())
         trues.extend(labels.numpy())
 
-    y_true = np.array(trues);  y_pred = np.array(preds)
+    y_true = np.array(trues)
+    y_pred = np.array(preds)
     m = compute_metrics(y_true, y_pred)
     print_metrics(m, split=split_name)
 
@@ -343,24 +330,24 @@ def evaluate(model: nn.Module, test_loader: DataLoader, split_name: str = 'Test'
     return m
 
 
-# ─────────────────────────────────────────────
-# PLOTS
-# ─────────────────────────────────────────────
+
 def _plot_confusion_matrix(cm: np.ndarray, title: str = 'Confusion Matrix',
-                            save_path: Optional[str] = None):
+                            save_path: Optional[Path] = None):
     cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
     fig, ax = plt.subplots(figsize=(8, 6))
     sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='Blues',
                 xticklabels=CLASS_NAMES, yticklabels=CLASS_NAMES, ax=ax,
                 cbar_kws={'label': 'Proportion'})
     ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.set_ylabel('True Label'); ax.set_xlabel('Predicted Label')
+    ax.set_ylabel('True Label')
+    ax.set_xlabel('Predicted Label')
     plt.tight_layout()
-    if save_path: fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
 
-def plot_fold_histories(fold_histories: List[Dict], save_path: Optional[str] = None):
+def plot_fold_histories(fold_histories: List[Dict], save_path: Optional[Path] = None):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     for i, h in enumerate(fold_histories):
         axes[0].plot(h['train_loss'], label=f'Fold {i+1} train', linestyle='--')
@@ -369,7 +356,9 @@ def plot_fold_histories(fold_histories: List[Dict], save_path: Optional[str] = N
         axes[1].plot(h['val_acc'],    label=f'Fold {i+1} val')
     for ax, title, ylabel in zip(axes, ['Loss', 'Accuracy'], ['Loss', 'Accuracy']):
         ax.set(xlabel='Epoch', ylabel=ylabel, title=title)
-        ax.legend(fontsize=8); ax.grid(alpha=.3)
+        ax.legend(fontsize=8)
+        ax.grid(alpha=.3)
     plt.tight_layout()
-    if save_path: fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
