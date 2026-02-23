@@ -68,8 +68,7 @@ def make_model(cfg: TrainConfig) -> nn.Module:
         mlp_ratio          = cfg.mlp_ratio,
         dropout            = cfg.dropout,
         rainfall_method    = cfg.rainfall_method,
-        spatial_method     = cfg.spatial_method,
-        pooling_method     = cfg.pooling_method,
+        rainfall_hidden    = cfg.rainfall_hidden,
         learnable_pos_enc  = cfg.learnable_pos_enc,
     )
 
@@ -267,7 +266,7 @@ def train_kfold(
 
         torch.save(
             {'fold': fold + 1, 'model_state_dict': best_state,
-             'best_monitor': best_fold_monitor, 'cfg': cfg},
+             'best_monitor': best_fold_monitor},
             ckpt_dir / f'fold_{fold+1}_best.pth',
         )
 

@@ -8,15 +8,16 @@ from pathlib import Path
 from typing import Dict, Tuple, List, Optional
 from scipy.ndimage import zoom
 from tqdm import tqdm
-from training import DEVICE, NUM_CLASSES, CLASS_NAMES
 from torch.utils.data import DataLoader
+from config import TrainConfig
 
-OUTPUT_DIR    = Path('./outputs')
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 PATCH_SIZE    = 4
 SPATIAL_SHAPE = (1152, 1152)
+CLASS_NAMES   = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
 
 CMAP_FLOOD = ListedColormap(['#CCCCCC', '#FFFFFF', '#FDD835', '#FB8C00', '#E53935', '#6A1B9A'])
-
 FLOOD_CLASSES = {
     0: {'name': 'No Flood', 'color': '#FFFFFF'},
     1: {'name': 'Light',    'color': '#FFEB3B'},
@@ -24,7 +25,6 @@ FLOOD_CLASSES = {
     3: {'name': 'Heavy',    'color': '#F44336'},
     4: {'name': 'Extreme',  'color': '#9C27B0'},
 }
-
 
 def _upsample(fmap: np.ndarray, H: int, W: int) -> np.ndarray:
     n_h, n_w = fmap.shape
@@ -51,6 +51,7 @@ def _flood_rgba(flood: np.ndarray, alphas: Dict[int, float]) -> np.ndarray:
         rgba[m,  3] = alphas[cls]
     return rgba
 
+
 def _style_ax(ax, xlabel='Column', ylabel='Row'):
     ax.set_xlabel(xlabel, fontsize=8, color='white')
     ax.set_ylabel(ylabel, fontsize=8, color='white')
@@ -58,15 +59,21 @@ def _style_ax(ax, xlabel='Column', ylabel='Row'):
     for sp in ax.spines.values():
         sp.set_edgecolor('white')
 
+
 def _flood_legend_patches():
     return [
         mpatches.Patch(color=FLOOD_CLASSES[c]['color'] if c > 0 else '#DDD',
                        label=FLOOD_CLASSES[c]['name'])
-        for c in range(5)
+        for c in range(len(FLOOD_CLASSES))
     ]
 
 
-def reconstruct_ground_truth_maps( test_metadata: List[Dict], y_test: np.ndarray, spatial_shape: Tuple[int, int] = SPATIAL_SHAPE, patch_size: int = PATCH_SIZE) -> Dict[int, np.ndarray]:
+def reconstruct_ground_truth_maps(
+    test_metadata:  List[Dict],
+    y_test:         np.ndarray,
+    spatial_shape:  Tuple[int, int] = SPATIAL_SHAPE,
+    patch_size:     int = PATCH_SIZE,
+) -> Dict[int, np.ndarray]:
     print("\n[Reconstructing Ground Truth Maps]")
     scenarios: Dict = {}
     for idx, meta in enumerate(test_metadata):
@@ -87,9 +94,15 @@ def reconstruct_ground_truth_maps( test_metadata: List[Dict], y_test: np.ndarray
     return gt_maps
 
 @torch.no_grad()
-def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, test_metadata: List[Dict], spatial_shape: Tuple[int, int] = SPATIAL_SHAPE, patch_size: int = PATCH_SIZE, output_dir: Path = OUTPUT_DIR / 'predictions') -> Dict:
-    
-    output_dir = Path(output_dir)
+def generate_prediction_maps(
+    model:         torch.nn.Module,
+    test_loader:   DataLoader,
+    test_metadata: List[Dict],
+    cfg:           TrainConfig,
+    spatial_shape: Tuple[int, int] = SPATIAL_SHAPE,
+    patch_size:    int = PATCH_SIZE,
+) -> Dict:
+    output_dir = Path(cfg.output_dir) / 'predictions'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 60)
@@ -108,7 +121,7 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
     all_preds = np.array(all_preds)
     all_probs = np.array(all_probs)
 
-    # ── Group & reconstruct in one pass ───────────────────────────────────────
+    # ── Group & reconstruct ───────────────────────────────────────────────────
     scenarios: Dict = {}
     for idx, meta in enumerate(test_metadata):
         sid = meta['scenario_id']
@@ -120,7 +133,7 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
     prediction_maps, all_conf = {}, []
     for sid, data in scenarios.items():
         pred_map = np.full(spatial_shape, -1, dtype=np.int8)
-        prob_map = np.zeros(spatial_shape + (NUM_CLASSES,), dtype=np.float32)
+        prob_map = np.zeros(spatial_shape + (cfg.num_classes,), dtype=np.float32)
         for pred, prob, (i, j) in zip(data['preds'], data['probs'], data['coords']):
             sl = (slice(i*patch_size, (i+1)*patch_size), slice(j*patch_size, (j+1)*patch_size))
             pred_map[sl] = pred
@@ -134,7 +147,7 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
             all_conf.append(valid)
         print(f"  Scenario {sid}: {len(data['preds'])} patches")
 
-    # ── Per-scenario prediction + confidence plots ────────────────────────────
+    # ── Per-scenario plots ────────────────────────────────────────────────────
     nc = min(3, len(prediction_maps))
     nr = (len(prediction_maps) + nc - 1) // nc
     grid_fig, grid_axes = plt.subplots(nr, nc, figsize=(5*nc, 4*nr))
@@ -144,11 +157,12 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
     for idx, (sid, maps) in enumerate(prediction_maps.items()):
         pred, conf = maps['prediction_map'], maps['confidence_map']
 
-        # Individual prediction map
+        # ── Individual prediction map ──────────────────────────────────────────
         fig, ax = plt.subplots(figsize=(10, 9))
-        im = ax.imshow(pred, cmap=CMAP_FLOOD, vmin=-1, vmax=4,
+        im = ax.imshow(pred, cmap=CMAP_FLOOD, vmin=-1, vmax=cfg.num_classes - 1,
                        interpolation='nearest', aspect='equal')
-        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=range(-1, 5))
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
+                            ticks=range(-1, cfg.num_classes))
         cbar.set_label('Flood Class', fontsize=12, fontweight='bold')
         cbar.ax.set_yticklabels(['NoData'] + CLASS_NAMES)
         ax.set_title(f'Predicted Flood Map — Scenario {sid}', fontsize=13, fontweight='bold')
@@ -157,27 +171,53 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
         fig.savefig(output_dir / f'prediction_scenario_{sid}.png', dpi=400, bbox_inches='tight')
         plt.close(fig)
 
-        # Confidence map (side-by-side)
+        # ── Confidence map ─────────────────────────────────────────────────────
         fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
-        im1 = axes2[0].imshow(conf, cmap='RdYlGn', vmin=0, vmax=1,
-                               interpolation='nearest', aspect='equal')
-        axes2[0].set_title(f'Confidence — Scenario {sid}', fontsize=12, fontweight='bold')
-        axes2[0].axis('off')
-        plt.colorbar(im1, ax=axes2[0], fraction=0.046).set_label('Confidence', fontsize=10)
+        fig2.patch.set_facecolor('#1a1a1a')
+        for ax2 in axes2:
+            ax2.set_facecolor('#2a2a2a')
 
-        low_mask = (conf < 0.5) & (conf > 0)
-        axes2[1].imshow(low_mask, cmap='Reds', interpolation='bilinear', aspect='equal')
-        axes2[1].set_title('Low Confidence Regions (<50%)', fontsize=12, fontweight='bold')
+        # Mask no-data pixels (outside valid flood region)
+        valid_mask  = conf > 0
+        conf_masked = np.ma.masked_where(~valid_mask, conf)
+        cmap_conf   = plt.cm.RdYlGn.copy()
+        cmap_conf.set_bad(color='#2a2a2a')
+
+        im1 = axes2[0].imshow(conf_masked, cmap=cmap_conf, vmin=0, vmax=1,
+                               interpolation='nearest', aspect='equal')
+        axes2[0].set_title(f'Confidence — Scenario {sid}', fontsize=12,
+                           fontweight='bold', color='white')
+        axes2[0].axis('off')
+        cbar1 = plt.colorbar(im1, ax=axes2[0], fraction=0.046)
+        cbar1.set_label('Confidence', fontsize=10, color='white')
+        cbar1.ax.tick_params(colors='white')
+        plt.setp(cbar1.ax.yaxis.get_ticklabels(), color='white')
+
+        # Low confidence — only within valid region
+        low_mask    = valid_mask & (conf < 0.5)
+        low_display = np.ma.masked_where(~valid_mask, low_mask.astype(float))
+        cmap_low    = plt.cm.Reds.copy()
+        cmap_low.set_bad(color='#2a2a2a')
+
+        axes2[1].imshow(low_display, cmap=cmap_low, vmin=0, vmax=1,
+                        interpolation='nearest', aspect='equal')
+        axes2[1].set_title('Low Confidence Regions (<50%)', fontsize=12,
+                           fontweight='bold', color='white')
         axes2[1].axis('off')
-        n_all = (conf > 0).sum()
-        pct   = low_mask.sum() / n_all * 100 if n_all > 0 else 0
-        axes2[1].text(0.5, -0.04, f'{low_mask.sum():,} pixels ({pct:.1f}%)',
-                      transform=axes2[1].transAxes, ha='center', fontsize=10)
+
+        n_valid = valid_mask.sum()
+        n_low   = low_mask.sum()
+        pct     = n_low / n_valid * 100 if n_valid > 0 else 0
+        axes2[1].text(0.5, -0.04, f'{n_low:,} / {n_valid:,} valid pixels ({pct:.1f}%)',
+                      transform=axes2[1].transAxes, ha='center',
+                      fontsize=10, color='white')
+
         fig2.savefig(output_dir / f'confidence_scenario_{sid}.png', dpi=400, bbox_inches='tight')
         plt.close(fig2)
 
-        # Grid thumbnail
-        last_im = grid_axes[idx].imshow(pred, cmap=CMAP_FLOOD, vmin=-1, vmax=4,
+        # ── Grid thumbnail ─────────────────────────────────────────────────────
+        last_im = grid_axes[idx].imshow(pred, cmap=CMAP_FLOOD, vmin=-1,
+                                         vmax=cfg.num_classes - 1,
                                          interpolation='nearest', aspect='equal')
         grid_axes[idx].set_title(f'Scenario {sid}', fontsize=10, fontweight='bold')
         grid_axes[idx].axis('off')
@@ -185,14 +225,15 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
     for idx in range(len(prediction_maps), len(grid_axes)):
         grid_axes[idx].axis('off')
     if last_im:
-        cbar = plt.colorbar(last_im, ax=grid_axes, fraction=0.02, pad=0.04, ticks=range(-1, 5))
+        cbar = plt.colorbar(last_im, ax=grid_axes, fraction=0.02, pad=0.04,
+                            ticks=range(-1, cfg.num_classes))
         cbar.set_label('Flood Class', fontsize=11, fontweight='bold')
         cbar.ax.set_yticklabels(['NoData'] + CLASS_NAMES, fontsize=9)
     plt.suptitle('Predicted Flood Maps — All Test Scenarios', fontsize=13, fontweight='bold')
     grid_fig.savefig(output_dir / 'prediction_grid.png', dpi=400, bbox_inches='tight')
     plt.close(grid_fig)
 
-    # ── Global confidence stats + histogram ───────────────────────────────────
+    # ── Confidence stats + histogram ──────────────────────────────────────────
     if all_conf:
         flat = np.concatenate(all_conf)
         print(f"\n  Confidence — mean={flat.mean():.4f}  median={np.median(flat):.4f}"
@@ -204,9 +245,12 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
 
         fig, ax = plt.subplots(figsize=(9, 5))
         ax.hist(flat, bins=50, color='steelblue', edgecolor='black', alpha=0.7)
-        ax.axvline(flat.mean(),     color='red',    linestyle='--', lw=2, label=f'Mean {flat.mean():.3f}')
-        ax.axvline(np.median(flat), color='orange', linestyle='--', lw=2, label=f'Median {np.median(flat):.3f}')
-        ax.set(xlabel='Confidence', ylabel='Frequency', title='Prediction Confidence Distribution')
+        ax.axvline(flat.mean(),     color='red',    linestyle='--', lw=2,
+                   label=f'Mean {flat.mean():.3f}')
+        ax.axvline(np.median(flat), color='orange', linestyle='--', lw=2,
+                   label=f'Median {np.median(flat):.3f}')
+        ax.set(xlabel='Confidence', ylabel='Frequency',
+               title='Prediction Confidence Distribution')
         ax.legend(); ax.grid(alpha=.3)
         plt.tight_layout()
         fig.savefig(output_dir / 'confidence_histogram.png', dpi=400, bbox_inches='tight')
@@ -216,18 +260,22 @@ def generate_prediction_maps(model: torch.nn.Module, test_loader: DataLoader, te
     return {'predictions': prediction_maps}
 
 
-def build_eval_results(gt_maps: Dict[int, np.ndarray], pred_maps_dict: Dict) -> Dict:
+def build_eval_results(
+    gt_maps:       Dict[int, np.ndarray],
+    pred_maps_dict: Dict,
+    cfg:           TrainConfig,
+) -> Dict:
     scenario_ids = sorted(gt_maps.keys())
     metrics, gt_list, pred_list = [], [], []
 
     for sid in scenario_ids:
-        gt   = gt_maps[sid]
-        pred = pred_maps_dict[sid]['prediction_map']
+        gt    = gt_maps[sid]
+        pred  = pred_maps_dict[sid]['prediction_map']
         valid = (gt >= 0) & (pred >= 0)
         acc   = (gt[valid] == pred[valid]).mean() if valid.any() else 0.0
 
         ious, f1s, precs, recs = [], [], [], []
-        for cls in range(NUM_CLASSES):
+        for cls in range(cfg.num_classes):
             tp   = ((pred == cls) & (gt == cls) & valid).sum()
             fp   = ((pred == cls) & (gt != cls) & valid).sum()
             fn   = ((pred != cls) & (gt == cls) & valid).sum()
@@ -235,12 +283,17 @@ def build_eval_results(gt_maps: Dict[int, np.ndarray], pred_maps_dict: Dict) -> 
             prec = tp / (tp + fp)      if (tp + fp) > 0      else 0.0
             rec  = tp / (tp + fn)      if (tp + fn) > 0      else 0.0
             f1   = 2*prec*rec / (prec+rec) if (prec+rec) > 0 else 0.0
-            ious.append(iou); f1s.append(f1); precs.append(prec); recs.append(rec)
+            ious.append(iou); f1s.append(f1)
+            precs.append(prec); recs.append(rec)
 
-        metrics.append({'scenario_id': sid, 'accuracy': acc,
-                        'iou_macro': np.mean(ious),   'f1_macro': np.mean(f1s),
-                        'precision_macro': np.mean(precs), 'recall_macro': np.mean(recs)})
-        gt_list.append(gt); pred_list.append(pred)
+        metrics.append({'scenario_id':      sid,
+                        'accuracy':         acc,
+                        'iou_macro':        np.mean(ious),
+                        'f1_macro':         np.mean(f1s),
+                        'precision_macro':  np.mean(precs),
+                        'recall_macro':     np.mean(recs)})
+        gt_list.append(gt)
+        pred_list.append(pred)
 
     f1s       = [m['f1_macro'] for m in metrics]
     best_idx  = int(np.argmax(f1s))
@@ -250,19 +303,30 @@ def build_eval_results(gt_maps: Dict[int, np.ndarray], pred_maps_dict: Dict) -> 
           f"Best RS{scenario_ids[best_idx]} F1={f1s[best_idx]:.3f}  |  "
           f"Worst RS{scenario_ids[worst_idx]} F1={f1s[worst_idx]:.3f}")
 
-    return {'gt_maps': gt_list, 'pred_maps': pred_list,
-            'per_scenario': metrics, 'scenario_ids': scenario_ids,
-            'n_h': gt_list[0].shape[0], 'n_w': gt_list[0].shape[1],
-            'f1_scores': f1s,
+    return {'gt_maps':      gt_list,
+            'pred_maps':    pred_list,
+            'per_scenario': metrics,
+            'scenario_ids': scenario_ids,
+            'n_h':          gt_list[0].shape[0],
+            'n_w':          gt_list[0].shape[1],
+            'f1_scores':    f1s,
             'aggregate': {'best_scenario':  scenario_ids[best_idx],
                           'worst_scenario': scenario_ids[worst_idx],
-                          'best_idx':  best_idx,
-                          'worst_idx': worst_idx}}
+                          'best_idx':       best_idx,
+                          'worst_idx':      worst_idx}}
 
 
-
-def plot_flood_on_dem(dem: np.ndarray, flood_map: np.ndarray, scenario_id: int, metrics: Dict, mode: str, figsize: tuple = (9, 11), inset_center: Optional[Tuple[int, int]] = None, inset_size: int = 120, pad: int = 5) -> plt.Figure:
-    
+def plot_flood_on_dem(
+    dem:           np.ndarray,
+    flood_map:     np.ndarray,
+    scenario_id:   int,
+    metrics:       Dict,
+    mode:          str,
+    figsize:       tuple = (9, 11),
+    inset_center:  Optional[Tuple[int, int]] = None,
+    inset_size:    int = 120,
+    pad:           int = 5,
+) -> plt.Figure:
     H_full, W_full = dem.shape
     flood_up = _upsample(flood_map, H_full, W_full)
     r0, r1, c0, c1 = _tight_bbox(dem, flood_up, pad)
@@ -271,7 +335,7 @@ def plot_flood_on_dem(dem: np.ndarray, flood_map: np.ndarray, scenario_id: int, 
     flood_crop = flood_up[r0:r1, c0:c1]
     H, W       = dem_crop.shape
 
-    rgba         = _flood_rgba(flood_crop, {0: 0.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0})
+    rgba            = _flood_rgba(flood_crop, {0: 0.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0})
     dem_p2, dem_p98 = np.nanpercentile(dem_crop, [2, 98])
 
     if inset_center is None:
@@ -289,7 +353,6 @@ def plot_flood_on_dem(dem: np.ndarray, flood_map: np.ndarray, scenario_id: int, 
     ir0 = max(0, ic_r - inset_size);  ir1 = min(H, ic_r + inset_size)
     ic0 = max(0, ic_c - inset_size);  ic1 = min(W, ic_c + inset_size)
 
-    # ── Figure ────────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=figsize, facecolor='#1a1a1a')
     ax  = fig.add_axes([0.08, 0.08, 0.72, 0.84], facecolor='#1a1a1a')
 
@@ -308,14 +371,12 @@ def plot_flood_on_dem(dem: np.ndarray, flood_map: np.ndarray, scenario_id: int, 
                   f"Rec={m['recall_macro']:.3f}  F1={m['f1_macro']:.3f}  IoU={m['iou_macro']:.3f}")
     ax.set_title(title, fontsize=11, fontweight='bold', pad=10, color='white')
 
-    # DEM colourbar
     cbar_ax = fig.add_axes([0.82, 0.35, 0.025, 0.50])
     cbar = fig.colorbar(dem_im, cax=cbar_ax)
     cbar.set_label("Elevation (m)", fontsize=9, color='white')
     cbar.ax.tick_params(labelsize=8, colors='white')
     plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
 
-    # Flood legend
     leg_ax = fig.add_axes([0.81, 0.08, 0.17, 0.22])
     leg_ax.set_facecolor('#1a1a1a'); leg_ax.axis('off')
     leg_ax.set_title("Flood Class", fontsize=8, fontweight='bold', pad=4, color='white')
@@ -327,16 +388,13 @@ def plot_flood_on_dem(dem: np.ndarray, flood_map: np.ndarray, scenario_id: int, 
         leg_ax.text(0.28, i*0.19+0.075, info['name'],
                     transform=leg_ax.transAxes, va='center', fontsize=7.5, color='white')
 
-    # Inset zoom
     asp      = (ir1-ir0) / max(ic1-ic0, 1)
     inset_fw = 0.28
     inset_fh = min(inset_fw * asp * figsize[0] / figsize[1], 0.32)
     ins = fig.add_axes([0.44, 0.06, inset_fw, inset_fh], facecolor='#1a1a1a')
-    ins.imshow(dem_crop[ir0:ir1, ic0:ic1], cmap='terrain',
-               vmin=dem_p2, vmax=dem_p98, origin='upper',
-               interpolation='bilinear', alpha=0.4, aspect='equal')
-    ins.imshow(rgba[ir0:ir1, ic0:ic1], origin='upper',
-               interpolation='nearest', aspect='equal')
+    ins.imshow(dem_crop[ir0:ir1, ic0:ic1], cmap='terrain', vmin=dem_p2, vmax=dem_p98,
+               origin='upper', interpolation='bilinear', alpha=0.4, aspect='equal')
+    ins.imshow(rgba[ir0:ir1, ic0:ic1], origin='upper', interpolation='nearest', aspect='equal')
     ins.set_xticks([]); ins.set_yticks([])
     for sp in ins.spines.values():
         sp.set_edgecolor('red'); sp.set_linewidth(2)
@@ -347,7 +405,12 @@ def plot_flood_on_dem(dem: np.ndarray, flood_map: np.ndarray, scenario_id: int, 
     return fig
 
 
-def plot_best_worst_dem(dem: np.ndarray, results: Dict, figsize: tuple = (18, 11), pad: int = 5) -> plt.Figure:
+def plot_best_worst_dem(
+    dem:     np.ndarray,
+    results: Dict,
+    figsize: tuple = (18, 11),
+    pad:     int = 5,
+) -> plt.Figure:
     H_full, W_full = dem.shape
     bi, wi = results['aggregate']['best_idx'], results['aggregate']['worst_idx']
 
@@ -368,10 +431,10 @@ def plot_best_worst_dem(dem: np.ndarray, results: Dict, figsize: tuple = (18, 11
     r0 = max(dr.min(), vr.min()-pad);  r1 = min(dr.max(), vr.max()+pad)
     c0 = max(dc.min(), vc.min()-pad);  c1 = min(dc.max(), vc.max()+pad)
 
-    dem_crop = dem[r0:r1, c0:c1]
-    maps_up  = {k: v[r0:r1, c0:c1] for k, v in maps_up.items()}
+    dem_crop        = dem[r0:r1, c0:c1]
+    maps_up         = {k: v[r0:r1, c0:c1] for k, v in maps_up.items()}
     dem_p2, dem_p98 = np.nanpercentile(dem_crop, [2, 98])
-    alphas = {0: 0.0, 1: 0.55, 2: 0.65, 3: 0.75, 4: 0.88}
+    alphas          = {0: 0.0, 1: 0.55, 2: 0.65, 3: 0.75, 4: 0.88}
 
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     fig.patch.set_facecolor('#1a1a1a')
@@ -380,14 +443,16 @@ def plot_best_worst_dem(dem: np.ndarray, results: Dict, figsize: tuple = (18, 11
     fig.suptitle("Best vs Worst Scenario — Metro Manila DEM + Flood Overlay",
                  fontsize=14, fontweight='bold', y=1.01, color='white')
 
-    configs = [(0,0,'best_gt',bi,'Best GT'), (0,1,'best_pred',bi,'Best Predicted'),
-               (1,0,'worst_gt',wi,'Worst GT'), (1,1,'worst_pred',wi,'Worst Predicted')]
-    im = None
+    configs = [(0, 0, 'best_gt',    bi, 'Best GT'),
+               (0, 1, 'best_pred',  bi, 'Best Predicted'),
+               (1, 0, 'worst_gt',   wi, 'Worst GT'),
+               (1, 1, 'worst_pred', wi, 'Worst Predicted')]
+
     for row, col, key, s_idx, label in configs:
         ax = axes[row, col]
         m  = results['per_scenario'][s_idx]
-        im = ax.imshow(dem_crop, cmap='terrain', vmin=dem_p2, vmax=dem_p98,
-                       origin='upper', interpolation='bilinear', aspect='equal', alpha=0.5)
+        ax.imshow(dem_crop, cmap='terrain', vmin=dem_p2, vmax=dem_p98,
+                  origin='upper', interpolation='bilinear', aspect='equal', alpha=0.5)
         ax.imshow(_flood_rgba(maps_up[key], alphas),
                   origin='upper', interpolation='nearest', aspect='equal')
         ax.set_title(f"RS{m['scenario_id']} — {label}\n"
@@ -395,17 +460,12 @@ def plot_best_worst_dem(dem: np.ndarray, results: Dict, figsize: tuple = (18, 11
                      fontsize=10, fontweight='bold', color='white')
         _style_ax(ax)
 
-    if im:
-        cbar = fig.colorbar(im, ax=axes, fraction=0.015, pad=0.02)
-        cbar.set_label("Elevation (m)", fontsize=9, color='white')
-        cbar.ax.tick_params(colors='white')
-        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
-
     fig.legend(handles=_flood_legend_patches(), loc='lower center', ncol=5,
                fontsize=9, bbox_to_anchor=(0.5, -0.04),
                facecolor='#2a2a2a', labelcolor='white', edgecolor='#555555')
     fig.text(0.5, -0.02,
-             f'Crop: rows [{r0}:{r1}], cols [{c0}:{c1}]  —  {dem_crop.shape[0]}×{dem_crop.shape[1]} px',
+             f'Crop: rows [{r0}:{r1}], cols [{c0}:{c1}]  —  '
+             f'{dem_crop.shape[0]}×{dem_crop.shape[1]} px',
              ha='center', color='#888888', fontsize=7, style='italic')
     plt.tight_layout()
     return fig

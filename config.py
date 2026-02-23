@@ -1,4 +1,3 @@
-# config.py
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import json
@@ -12,16 +11,15 @@ class TrainConfig:
     mlp_ratio:          float = 2.0
     dropout:            float = 0.1
     rainfall_method:    str = 'conv'
-    spatial_method:     str = 'conv'
-    pooling_method:     str = 'mean'
+    rainfall_hidden:    int   = 64
     learnable_pos_enc:  bool = True
     batch_size:         int = 1024
-    num_epochs:         int = 50
-    num_folds:          int = 5
+    num_epochs:         int = 1
+    num_folds:          int = 2
     lr:                 float = 3e-4
     weight_decay:       float = 1e-4
     grad_clip_norm:     float = 1.0
-    loss_type:          str = 'ce'          # 'ce' or 'focal'
+    loss_type:          str = 'ce'         
     focal_gamma:        float = 2.0
     label_smoothing:    float = 0.0
     weight_power:       float = 0.5
