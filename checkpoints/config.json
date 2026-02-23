@@ -1,0 +1,47 @@
+{
+  "data": {
+    "patch_size": 4,
+    "num_classes": 5,
+    "rainfall_timesteps": 13,
+    "input_channels": 11,
+    "training_samples": 224000,
+    "test_samples": 96000,
+    "num_train_scenarios": 35,
+    "num_test_scenarios": 15,
+    "patches_per_scenario": 6400,
+    "channel_breakdown": {
+      "dem": 1,
+      "infiltration": 1,
+      "landuse": 1,
+      "drainage": 4,
+      "soil": 4
+    }
+  },
+  "model": {
+    "embed_dim": 256,
+    "num_layers": 4,
+    "num_heads": 8,
+    "mlp_ratio": 2.0,
+    "dropout": 0.1,
+    "rainfall_method": "conv",
+    "learnable_pos_enc": true,
+    "use_cls_token": false
+  },
+  "train": {
+    "batch_size": 1024,
+    "num_epochs": 50,
+    "num_folds": 10,
+    "lr": 0.0001,
+    "weight_decay": 0.05,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "warmup_epochs": 10,
+    "min_lr": 1e-06,
+    "grad_clip_norm": 1.0,
+    "early_stop_patience": 10,
+    "checkpoint_metric": "macro_f1",
+    "output_dir": "checkpoints"
+  }
+}

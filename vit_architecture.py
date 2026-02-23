@@ -209,23 +209,12 @@ class ViTFloodClassifier(nn.Module):
         self.use_cls_token = use_cls_token
         self.num_timesteps = num_timesteps
         
-        # --- COMPONENT 1: Spatial Patch Encoder ---
-        # Learns a compressed representation of the terrain at this patch location.
-        # The 11 input channels encode physical properties that govern flood behavior:
-        # elevation (DEM) determines flow direction and ponding risk; infiltration and
-        # soil type determine how much rain is absorbed vs. runs off; landuse determines
-        # surface permeability; drainage networks determine water removal capacity.
         self.patch_embedding = PatchEmbedding(
             in_channels=in_channels,
             patch_size=patch_size,
             embed_dim=embed_dim
         )
         
-        # --- COMPONENT 2: Temporal Rainfall Encoder ---
-        # Learns a compressed representation of the rainfall event's temporal profile.
-        # hidden_dim=128 provides sufficient capacity to capture temporal patterns
-        # while remaining much smaller than embed_dim=256, keeping the rainfall encoder
-        # lightweight relative to the spatial encoder.
         self.rainfall_embedding = RainfallSequenceEmbedding(
             num_timesteps=num_timesteps,
             embed_dim=embed_dim,
@@ -233,20 +222,12 @@ class ViTFloodClassifier(nn.Module):
             method=rainfall_method
         )
         
-        # --- COMPONENT 3: Positional Encoding ---
-        # Only 2 positions needed: [0] = rainfall token, [1] = spatial token.
-        # The ordering (rainfall first) is arbitrary but must be consistent —
-        # the model learns position-specific roles through training.
         self.pos_encoding = PositionalEncoding(
             num_positions=2,
             embed_dim=embed_dim,
             learnable=learnable_pos_enc
         )
         
-        # --- COMPONENT 4: Transformer Encoder ---
-        # The core of the model. With num_layers=4 and 2 tokens, this is a relatively
-        # lightweight transformer focused entirely on modeling the rainfall-terrain
-        # interaction rather than spatial relationships between many patches.
         self.transformer = TransformerEncoder(
             num_layers=num_layers,
             embed_dim=embed_dim,
@@ -255,8 +236,6 @@ class ViTFloodClassifier(nn.Module):
             dropout=dropout
         )
         
-        # --- COMPONENT 5: Classification Head ---
-        # Converts the fused rainfall-terrain representation to flood class probabilities.
         self.classifier = ClassificationHead(
             embed_dim=embed_dim,
             num_classes=num_classes,
@@ -264,13 +243,6 @@ class ViTFloodClassifier(nn.Module):
             use_cls_token=use_cls_token
         )
         
-        # --- WEIGHT INITIALIZATION ---
-        # self.apply() recursively calls _init_weights on every submodule in the model.
-        # This happens ONCE at construction time, before any training.
-        # Proper initialization is critical: bad initialization can cause:
-        #   - Vanishing gradients (activations → 0 from the first forward pass)
-        #   - Exploding gradients (activations → ∞, NaN loss immediately)
-        #   - Symmetry breaking failure (all neurons learn identical features)
         self.apply(self._init_weights)
     
     def _init_weights(self, m):
@@ -295,38 +267,16 @@ class ViTFloodClassifier(nn.Module):
         return_attention: bool = False
     ) -> Tuple[torch.Tensor, Optional[list]]:
         
-        # Step 1: Encode the spatial patch into a single terrain token
-        # Each of the 11 channels contributes to a holistic terrain representation
-        patch_tokens = self.patch_embedding(spatial_patch)          # → (batch, 1, embed_dim)
-        
-        # Step 2: Encode the temporal rainfall sequence into a single rainfall token
-        # The Conv1d encoder extracts temporal patterns before projecting to embed_dim
-        rainfall_tokens = self.rainfall_embedding(rainfall_sequence) # → (batch, 1, embed_dim)
-        
-        # Step 3: Concatenate into a 2-token multimodal sequence
-        # Ordering: [rainfall | patch] — rainfall first, patch second.
-        # This ordering is preserved by positional encoding so the model always
-        # knows which token represents which modality.
-        tokens = torch.cat([rainfall_tokens, patch_tokens], dim=1)  # → (batch, 2, embed_dim)
-        
-        # Step 4: Add positional encoding to distinguish token roles
-        # Without this, attention is blind to which token is rainfall and which is terrain
-        tokens = self.pos_encoding(tokens)                          # → (batch, 2, embed_dim)
-        
-        # Step 5: Cross-modal fusion via stacked self-attention layers
-        # Each layer refines the token representations by attending to the other token,
-        # progressively building a joint rainfall-terrain feature representation
-        encoded, attention_maps = self.transformer(
-            tokens, return_attention=return_attention
-        )                                                           # → (batch, 2, embed_dim)
-        
-        # Step 6: Pool across tokens and classify into flood severity
-        # Mean pooling ensures both rainfall and terrain representations contribute
-        # equally to the final flood class prediction
-        logits = self.classifier(encoded)                          # → (batch, 5)
-        
+
+        patch_tokens = self.patch_embedding(spatial_patch)         
+        rainfall_tokens = self.rainfall_embedding(rainfall_sequence)
+        tokens = torch.cat([rainfall_tokens, patch_tokens], dim=1)  
+        tokens = self.pos_encoding(tokens)                        
+        encoded, attention_maps = self.transformer(tokens, return_attention=return_attention)  
+        logits = self.classifier(encoded)                         
+
         if return_attention:
-            return logits, attention_maps  # attention_maps: list of (batch, heads, 2, 2) per layer
+            return logits, attention_maps 
         else:
             return logits, None
 
