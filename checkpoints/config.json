@@ -1,0 +1,25 @@
+{
+  "model": {
+    "in_channels": 3,
+    "patch_size": 4,
+    "num_classes": 5,
+    "embed_dim": 256,
+    "num_layers": 4,
+    "num_heads": 8,
+    "mlp_ratio": 2.0,
+    "dropout": 0.1,
+    "learnable_pos_enc": true,
+    "rainfall_method": "conv",
+    "num_timesteps": 26,
+    "rainfall_hidden": 64
+  },
+  "train": {
+    "batch_size": 1024,
+    "num_epochs": 1,
+    "num_folds": 2,
+    "lr": 0.0003,
+    "weight_decay": 0.0001,
+    "num_classes": 5,
+    "output_dir": "checkpoints"
+  }
+}

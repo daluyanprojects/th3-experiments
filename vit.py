@@ -5,12 +5,6 @@ from typing import Optional, Tuple, List
 import math
 
 
-# ─────────────────────────────────────────────
-# RAINFALL ENCODER
-# Accepts (batch, 13) normalized intensity sequence
-# Outputs (batch, 1, embed_dim) — a single conditioning token
-# ─────────────────────────────────────────────
-
 class RainfallEncoder(nn.Module):
     def __init__(
         self,
@@ -27,15 +21,12 @@ class RainfallEncoder(nn.Module):
 
         if method == 'conv':
             self.encoder = nn.Sequential(
-                # (batch, 1, 13) → (batch, hidden_dim, 13)
                 nn.Conv1d(1, hidden_dim, kernel_size=3, padding=1),
                 nn.GELU(),
-                # (batch, hidden_dim, 13) → (batch, hidden_dim, 13)
                 nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
                 nn.GELU(),
-                # (batch, hidden_dim, 13) → (batch, hidden_dim, 1)
                 nn.AdaptiveAvgPool1d(1),
-                nn.Flatten(),                          # (batch, hidden_dim)
+                nn.Flatten(),                    
             )
             self.projection = nn.Linear(hidden_dim, embed_dim)
 
@@ -45,37 +36,16 @@ class RainfallEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (batch, 13) normalized rainfall intensities
-
-        Returns:
-            token: (batch, 1, embed_dim)
-        """
         if self.method == 'conv':
-            x = x.unsqueeze(1)                            # (batch, 1, 13)
-            out = self.encoder(x)                         # (batch, hidden_dim)
-            out = self.projection(out)                    # (batch, embed_dim
+            x = x.unsqueeze(1)                            
+            out = self.encoder(x)                         
+            out = self.projection(out)                    
 
         out = self.dropout(out)
-        return out.unsqueeze(1)                           # (batch, 1, embed_dim)
+        return out.unsqueeze(1)                          
 
-
-# ─────────────────────────────────────────────
-# PATCH EMBEDDING
-# Accepts one (4, 4, 3) patch per batch item
-# Conv2d with kernel=patch_size collapses it to a single token
-# ─────────────────────────────────────────────
 
 class PatchEmbedding(nn.Module):
-    """
-    Projects a single (C, patch_size, patch_size) spatial patch
-    into a 1-token sequence of dimension embed_dim.
-
-    Input:  (batch, C, patch_size, patch_size)
-    Output: (batch, 1, embed_dim)
-    """
-
     def __init__(self, in_channels: int, patch_size: int, embed_dim: int):
         super().__init__()
         self.projection = nn.Conv2d(
@@ -91,18 +61,7 @@ class PatchEmbedding(nn.Module):
         x = x.transpose(1, 2)    # (batch, 1, embed_dim)
         return x
 
-
-# ─────────────────────────────────────────────
-# POSITIONAL ENCODING
-# Fixed at 2 positions: [0]=rainfall token, [1]=patch token
-# ─────────────────────────────────────────────
-
 class PositionalEncoding(nn.Module):
-    """
-    Learnable or sinusoidal positional encoding.
-    num_positions=2: position 0 = rainfall token, position 1 = spatial patch token.
-    """
-
     def __init__(self, num_positions: int, embed_dim: int, learnable: bool = True):
         super().__init__()
         if learnable:
@@ -121,11 +80,6 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.pos_embedding
-
-
-# ─────────────────────────────────────────────
-# TRANSFORMER BLOCK
-# ─────────────────────────────────────────────
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float, dropout: float):
@@ -159,10 +113,6 @@ class TransformerBlock(nn.Module):
         return x, attn_weights if return_attention else None
 
 
-# ─────────────────────────────────────────────
-# TRANSFORMER ENCODER
-# ─────────────────────────────────────────────
-
 class TransformerEncoder(nn.Module):
     def __init__(
         self, num_layers: int, embed_dim: int, num_heads: int,
@@ -186,22 +136,7 @@ class TransformerEncoder(nn.Module):
         return self.norm(x), attn_maps
 
 
-# ─────────────────────────────────────────────
-# CLASSIFICATION HEAD
-# Operates on the patch token (position 1) — NOT the rainfall token
-# rainfall token is a conditioning signal, not a prediction target
-# ─────────────────────────────────────────────
-
 class ClassificationHead(nn.Module):
-    """
-    Reads the patch token (index 1) from the encoded sequence and
-    maps it to class logits.
-
-    Deliberately uses index 1 (patch token) rather than mean pooling
-    because index 0 is the rainfall conditioning token — averaging
-    them would mix conditioning with spatial features.
-    """
-
     def __init__(self, embed_dim: int, num_classes: int, dropout: float):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -212,12 +147,8 @@ class ClassificationHead(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, 2, embed_dim)
-        # Index 1 = patch token (index 0 is rainfall conditioning token)
-        patch_token = x[:, 1, :]        # (batch, embed_dim)
-        return self.mlp(patch_token)    # (batch, num_classes)
-
-
+        patch_token = x[:, 1, :]        
+        return self.mlp(patch_token)    
 
 class ViT(nn.Module):
     def __init__(
