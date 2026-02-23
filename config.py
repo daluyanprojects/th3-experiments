@@ -14,8 +14,8 @@ class TrainConfig:
     rainfall_hidden:    int   = 64
     learnable_pos_enc:  bool = True
     batch_size:         int = 1024
-    num_epochs:         int = 1
-    num_folds:          int = 2
+    num_epochs:         int = 50
+    num_folds:          int = 5
     lr:                 float = 3e-4
     weight_decay:       float = 1e-4
     grad_clip_norm:     float = 1.0
