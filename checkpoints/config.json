@@ -25,12 +25,12 @@
     "dropout": 0.1,
     "rainfall_method": "conv",
     "learnable_pos_enc": true,
-    "use_cls_token": false
+    "rainfall_hidden": 128
   },
   "train": {
     "batch_size": 1024,
-    "num_epochs": 50,
-    "num_folds": 10,
+    "num_epochs": 5,
+    "num_folds": 5,
     "lr": 0.0001,
     "weight_decay": 0.05,
     "betas": [

@@ -3,19 +3,19 @@ from pathlib import Path
 from typing import Dict, Optional
 import json
 
-# ── Dataset info ──────────────────────
+# ── Dataset info ──────────────────────────────────────────────────────────────
 @dataclass
 class DatasetConfig:
     patch_size:           int  = 4
     num_classes:          int  = 5
     rainfall_timesteps:   int  = 13
-    input_channels:       int  = None 
+    input_channels:       int  = None
     training_samples:     int  = None
     test_samples:         int  = None
     num_train_scenarios:  int  = None
     num_test_scenarios:   int  = None
     patches_per_scenario: int  = None
-    channel_breakdown: Dict   = field(default_factory=dict) 
+    channel_breakdown:    Dict = field(default_factory=dict)
 
     def populate(self, spatial_patches, train_dataset, test_dataset,
                  train_data, drainage_resized, soil_resized):
@@ -49,31 +49,31 @@ class DatasetConfig:
 # ── Model architecture ────────────────────────────────────────────────────────
 @dataclass
 class ModelConfig:
-    embed_dim:        int   = 256
-    num_layers:       int   = 4
-    num_heads:        int   = 8
-    mlp_ratio:        float = 2.0
-    dropout:          float = 0.1
-    rainfall_method:  str   = 'conv'
-    learnable_pos_enc: bool = True
-    use_cls_token:    bool  = False
+    embed_dim:         int   = 256
+    num_layers:        int   = 4
+    num_heads:         int   = 8
+    mlp_ratio:         float = 2.0
+    dropout:           float = 0.1
+    rainfall_method:   str   = 'conv'
+    learnable_pos_enc: bool  = True
+    rainfall_hidden:   int   = 128
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
 @dataclass
 class TrainConfig:
-    batch_size:      int   = 1024
-    num_epochs:      int   = 50
-    num_folds:       int   = 10
-    lr:              float = 1e-4
-    weight_decay:    float = 0.05
-    betas:           tuple = (0.9, 0.999)
-    warmup_epochs:   int   = 10
-    min_lr:          float = 1e-6
-    grad_clip_norm:  float = 1.0
-    early_stop_patience: int = 10
-    checkpoint_metric:   str = 'macro_f1'
-    output_dir:      Path = Path('./checkpoints')
+    batch_size:          int   = 1024
+    num_epochs:          int   = 50
+    num_folds:           int   = 5
+    lr:                  float = 1e-4
+    weight_decay:        float = 0.05
+    betas:               tuple = (0.9, 0.999)
+    warmup_epochs:       int   = 10
+    min_lr:              float = 1e-6
+    grad_clip_norm:      float = 1.0
+    early_stop_patience: int   = 10
+    checkpoint_metric:   str   = 'macro_f1'
+    output_dir:          Path  = Path('./checkpoints')
 
     def save(self, path: Path):
         path = Path(path)
@@ -88,7 +88,7 @@ class TrainConfig:
         with open(path) as f:
             d = json.load(f)
         d['output_dir'] = Path(d['output_dir'])
-        d['betas'] = tuple(d['betas'])
+        d['betas']      = tuple(d['betas'])
         return cls(**d)
 
 

@@ -242,17 +242,17 @@ def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
         val_loader   = DataLoader(Subset(full_dataset, val_indices),
                                   batch_size=cfg.batch_size, shuffle=False, num_workers=0)
 
-        model = model().to(device)
-        history, best_f1 = train_one_fold(model, train_loader, val_loader, fold_idx, cfg, device)
+        fold_model = model().to(device)
+        history, best_f1 = train_one_fold(fold_model, train_loader, val_loader, fold_idx, cfg, device)
 
         fold_histories.append(history)
         fold_best_f1s.append(best_f1)
 
         save_dir = cfg.output_dir / f'fold_{fold_idx+1}'
         save_dir.mkdir(parents=True, exist_ok=True)
-        torch.save({'model_state_dict': model.state_dict(),
-                    'best_macro_f1': best_f1,
-                    'fold': fold_idx + 1}, save_dir / 'best_model.pt')
+        torch.save({'model_state_dict': fold_model.state_dict(),
+            'best_macro_f1': best_f1,
+            'fold': fold_idx + 1}, save_dir / 'best_model.pt')
         with open(save_dir / 'history.json', 'w') as f:
             json.dump(history, f, indent=2)
 
