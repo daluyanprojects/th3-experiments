@@ -26,6 +26,8 @@ class TrainConfig:
     weight_decay:     float = 1e-4
     num_classes:      int   = 5
     betas:            tuple = (0.9, 0.999)
+    warmup_epochs:    int   = 10
+    min_lr:              float = 1e-6
     output_dir:       Path  = Path('./checkpoints')
 
     def save(self, path: Path):
