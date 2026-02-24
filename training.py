@@ -8,8 +8,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 import copy
 from config import TrainConfig
-
-class_names = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
+from sklearn.utils.class_weight import compute_class_weight
 
 class FloodPatchDataset(Dataset):
     def __init__(self, X_spatial: np.ndarray, y_labels: np.ndarray, rainfall: np.ndarray):
@@ -33,23 +32,152 @@ class FloodPatchDataset(Dataset):
         scenario_idx = idx  % self.N_scenarios
         return self.X[patch_idx], self.rain[scenario_idx], self.y[patch_idx, scenario_idx]
 
+class_names = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
 
-def compute_class_weights(y_train: np.ndarray, num_classes: int = 5) -> torch.Tensor:
-    flat  = y_train.flatten()
-    flat  = flat[flat >= 0]
-    total = len(flat)
+class CombinedLoss(nn.Module):
+    def __init__(self, class_weights: torch.Tensor, smooth: float = 1.0,
+                 ce_weight: float = 0.9, dice_weight: float = 0.1):
+        super().__init__()
+        self.ce          = nn.CrossEntropyLoss(weight=class_weights)
+        self.smooth      = smooth
+        self.ce_weight   = ce_weight
+        self.dice_weight = dice_weight
 
-    weights = np.zeros(num_classes, dtype=np.float32)
-    for c in range(num_classes):
-        count      = (flat == c).sum()
-        weights[c] = total / (num_classes * count) if count > 0 else 0.0
-    weights = weights / weights.sum() * num_classes
+    def dice_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        pred      = torch.softmax(pred, dim=1)
+        target_oh = torch.nn.functional.one_hot(target, num_classes=pred.shape[1]).float()
+        intersection = (pred * target_oh).sum(dim=0)
+        union        = pred.sum(dim=0) + target_oh.sum(dim=0)
+        dice         = (2.0 * intersection + self.smooth) / (union + self.smooth)
+        return 1.0 - dice.mean()
 
-    print("Class weights (inverse frequency):")
-    for i, (name, w) in enumerate(zip(class_names, weights)):
-        count = (flat == i).sum()
-        print(f"  Class {i} ({name:10s}): {count/total*100:5.2f}%  →  weight {w:.4f}")
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.ce_weight * self.ce(pred, target) + self.dice_weight * self.dice_loss(pred, target)
 
+
+class WarmupCosineScheduler:
+    def __init__(self, optimizer, cfg: TrainConfig):
+        self.optimizer     = optimizer
+        self.warmup_epochs = cfg.warmup_epochs
+        self.total_epochs  = cfg.num_epochs
+        self.base_lr       = cfg.lr
+        self.min_lr        = cfg.min_lr
+        self.current_epoch = 0
+
+    def step(self) -> float:
+        if self.current_epoch < self.warmup_epochs:
+            lr = self.base_lr * (self.current_epoch / max(self.warmup_epochs, 1))
+        else:
+            progress = ((self.current_epoch - self.warmup_epochs) /
+                        max(self.total_epochs - self.warmup_epochs, 1))
+            lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + np.cos(np.pi * progress))
+        for pg in self.optimizer.param_groups:
+            pg['lr'] = lr
+        self.current_epoch += 1
+        return lr
+
+
+def train_kfold(
+    model_factory,
+    full_dataset: FloodPatchDataset,
+    y_train:      np.ndarray,
+    cfg:          TrainConfig,
+    device:       torch.device = torch.device('cpu'),
+) -> Tuple[List[Dict], int]:
+
+    N_patches   = full_dataset.N_patches
+    N_scenarios = full_dataset.N_scenarios
+
+    class_weights = compute_class_weights(y_train).to(device)
+    criterion     = CombinedLoss(class_weights=class_weights)
+    kf            = KFold(n_splits=cfg.num_folds, shuffle=True, random_state=42)
+    patch_indices = np.arange(N_patches)
+
+    fold_histories:  List[Dict] = []
+    best_f1_overall: float      = -1.0
+    best_fold_idx:   int        = 0
+
+    for fold, (train_patch_idx, val_patch_idx) in enumerate(kf.split(patch_indices)):
+        print(f"\n{'='*60}")
+        print(f"FOLD {fold+1} / {cfg.num_folds}")
+        print(f"  Train samples : {len(train_patch_idx) * N_scenarios:,}")
+        print(f"  Val   samples : {len(val_patch_idx)   * N_scenarios:,}")
+        print(f"{'='*60}")
+
+        train_flat = np.concatenate([
+            np.arange(p * N_scenarios, (p+1) * N_scenarios) for p in train_patch_idx
+        ])
+        val_flat = np.concatenate([
+            np.arange(p * N_scenarios, (p+1) * N_scenarios) for p in val_patch_idx
+        ])
+
+        train_loader = DataLoader(full_dataset, batch_size=cfg.batch_size,
+                                  sampler=SubsetRandomSampler(train_flat),
+                                  num_workers=2, pin_memory=False)
+        val_loader   = DataLoader(full_dataset, batch_size=cfg.batch_size,
+                                  sampler=SubsetRandomSampler(val_flat),
+                                  num_workers=2, pin_memory=False)
+
+        model     = model_factory().to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
+                                      weight_decay=cfg.weight_decay,
+                                      betas=cfg.betas)          
+        scheduler = WarmupCosineScheduler(optimizer, cfg)        
+
+        history        = defaultdict(list)
+        best_f1_fold   = -1.0
+        best_state     = None
+
+        for epoch in range(cfg.num_epochs):
+            lr = scheduler.step()                                 
+            tr_loss, tr_acc, _      = run_epoch(model, train_loader, criterion, optimizer, device, is_train=True)
+            vl_loss, vl_acc, vl_f1  = run_epoch(model, val_loader,   criterion, None,      device, is_train=False)
+
+            history['train_loss'].append(tr_loss)
+            history['train_acc'].append(tr_acc)
+            history['val_loss'].append(vl_loss)
+            history['val_acc'].append(vl_acc)
+            history['val_macro_f1'].append(vl_f1)
+            history['lr'].append(lr)                             
+
+            print(f"  Epoch {epoch+1:2d}/{cfg.num_epochs}  lr={lr:.6f}  "
+                  f"train_loss={tr_loss:.4f}  train_acc={tr_acc:.4f}  "
+                  f"val_loss={vl_loss:.4f}  val_acc={vl_acc:.4f}  val_f1={vl_f1:.4f}")
+
+            if vl_f1 > best_f1_fold:
+                best_f1_fold = vl_f1
+                best_state   = copy.deepcopy(model.state_dict())
+                print(f"  → Best Macro F1: {best_f1_fold:.4f}")
+
+        # Save checkpoint
+        save_dir = cfg.output_dir / f'fold_{fold+1}'
+        save_dir.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            'model_state_dict': best_state,
+            'best_macro_f1':    best_f1_fold,
+            'fold':             fold + 1,
+        }, save_dir / 'best_model.pt')
+
+        history['best_macro_f1'] = best_f1_fold
+        fold_histories.append(dict(history))
+
+        print(f"\n  ✓ Fold {fold+1} best macro F1: {best_f1_fold:.4f}")
+        if best_f1_fold > best_f1_overall:
+            best_f1_overall = best_f1_fold
+            best_fold_idx   = fold
+
+    print(f"\n{'='*60}")
+    print(f"K-FOLD COMPLETE  |  Best fold: {best_fold_idx+1}  |  Best macro F1: {best_f1_overall:.4f}")
+    print(f"{'='*60}")
+    return fold_histories, best_fold_idx
+
+
+def compute_class_weights(y_train: np.ndarray) -> torch.Tensor:
+    flat = y_train.flatten()
+    flat = flat[flat >= 0] 
+
+    classes = np.unique(flat)
+    weights = compute_class_weight(class_weight='balanced', classes=classes, y=flat)
     return torch.tensor(weights, dtype=torch.float32)
 
 
@@ -102,95 +230,3 @@ def run_epoch(
     macro_f1 = sk_f1(all_labels, all_preds, average='macro', zero_division=0) if not is_train else None
 
     return avg_loss, avg_acc, macro_f1
-
-
-def train_kfold(
-    model_factory,
-    full_dataset: FloodPatchDataset,
-    y_train:      np.ndarray,
-    cfg:          TrainConfig,
-    device:       torch.device = torch.device('cpu'),
-) -> Tuple[List[Dict], int]:
-
-    N_patches   = full_dataset.N_patches
-    N_scenarios = full_dataset.N_scenarios
-
-    class_weights = compute_class_weights(y_train, cfg.num_classes).to(device)
-    criterion     = nn.CrossEntropyLoss(weight=class_weights)
-    kf            = KFold(n_splits=cfg.num_folds, shuffle=True, random_state=42)
-    patch_indices = np.arange(N_patches)
-
-    fold_histories:  List[Dict] = []
-    best_f1_overall: float      = -1.0
-    best_fold_idx:   int        = 0
-
-    for fold, (train_patch_idx, val_patch_idx) in enumerate(kf.split(patch_indices)):
-        print(f"\n{'='*60}")
-        print(f"FOLD {fold+1} / {cfg.num_folds}")
-        print(f"  Train samples : {len(train_patch_idx) * N_scenarios:,}")
-        print(f"  Val   samples : {len(val_patch_idx)   * N_scenarios:,}")
-        print(f"{'='*60}")
-
-        train_flat = np.concatenate([
-            np.arange(p * N_scenarios, (p+1) * N_scenarios) for p in train_patch_idx
-        ])
-        val_flat = np.concatenate([
-            np.arange(p * N_scenarios, (p+1) * N_scenarios) for p in val_patch_idx
-        ])
-
-        train_loader = DataLoader(full_dataset, batch_size=cfg.batch_size,
-                                  sampler=SubsetRandomSampler(train_flat),
-                                  num_workers=2, pin_memory=False)
-        val_loader   = DataLoader(full_dataset, batch_size=cfg.batch_size,
-                                  sampler=SubsetRandomSampler(val_flat),
-                                  num_workers=2, pin_memory=False)
-
-        model     = model_factory().to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.num_epochs)
-
-        history        = defaultdict(list)
-        best_f1_fold   = -1.0
-        best_state     = None
-
-        for epoch in range(cfg.num_epochs):
-            tr_loss, tr_acc, _      = run_epoch(model, train_loader, criterion, optimizer, device, is_train=True)
-            vl_loss, vl_acc, vl_f1  = run_epoch(model, val_loader,   criterion, None,      device, is_train=False)
-            scheduler.step()
-
-            history['train_loss'].append(tr_loss)
-            history['train_acc'].append(tr_acc)
-            history['val_loss'].append(vl_loss)
-            history['val_acc'].append(vl_acc)
-            history['val_macro_f1'].append(vl_f1)
-
-            print(f"  Epoch {epoch+1:2d}/{cfg.num_epochs}  "
-                  f"train_loss={tr_loss:.4f}  train_acc={tr_acc:.4f}  "
-                  f"val_loss={vl_loss:.4f}  val_acc={vl_acc:.4f}  val_f1={vl_f1:.4f}")
-
-            if vl_f1 > best_f1_fold:
-                best_f1_fold = vl_f1
-                best_state   = copy.deepcopy(model.state_dict())
-
-        # Save checkpoint
-        save_dir = cfg.output_dir / f'fold_{fold+1}'
-        save_dir.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            'model_state_dict': best_state,
-            'best_macro_f1':    best_f1_fold,
-            'fold':             fold + 1,
-        }, save_dir / 'best_model.pt')
-
-        history['best_macro_f1'] = best_f1_fold
-        history['best_state']    = best_state
-        fold_histories.append(dict(history))
-
-        print(f"\n  ✓ Fold {fold+1} best macro F1: {best_f1_fold:.4f}")
-        if best_f1_fold > best_f1_overall:
-            best_f1_overall = best_f1_fold
-            best_fold_idx   = fold
-
-    print(f"\n{'='*60}")
-    print(f"K-FOLD COMPLETE  |  Best fold: {best_fold_idx+1}  |  Best macro F1: {best_f1_overall:.4f}")
-    print(f"{'='*60}")
-    return fold_histories, best_fold_idx
