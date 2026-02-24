@@ -15,7 +15,7 @@
   },
   "train": {
     "batch_size": 1024,
-    "num_epochs": 1,
+    "num_epochs": 10,
     "num_folds": 2,
     "lr": 0.0003,
     "weight_decay": 0.0001,
