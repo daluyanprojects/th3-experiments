@@ -8,6 +8,7 @@ import numpy as np
 from typing import Optional, Tuple, List
 import glob
 from pathlib import Path
+import re
 
 
 def load_dem(file_path: str) -> Tuple[np.ndarray, Dict]:
@@ -232,18 +233,21 @@ def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.nda
     print(f"\nTotal flood maps loaded: {len(flood_maps)}")
     return flood_maps, flood_metadata
 
-def load_all_rainfall_scenarios(rainfall_dir: str) -> List[pd.DataFrame]:
+def load_all_rainfall_scenarios(folder_path: str) -> List[pd.DataFrame]:
+    # Get all matching files
+    files = [
+        f for f in os.listdir(folder_path)
+        if re.search(r'Scenario_(\d+)_mmhr', f)
+    ]
+    
+    # Sort NUMERICALLY by scenario ID — not lexicographically
+    files.sort(key=lambda f: int(re.search(r'Scenario_(\d+)_mmhr', f).group(1)))
+    
     scenarios = []
-
-    for file in os.listdir(rainfall_dir):
-        if file.endswith(".csv") and "Rainfall_Scenario" in file:
-            file_path = os.path.join(rainfall_dir, file)
-
-            scenario_id = int(file.split("_")[2])
-            df = load_rainfall_scenario(file_path, scenario_id=scenario_id)
-            scenarios.append(df)
-
-    print(f"\nTotal rainfall scenarios loaded: {len(scenarios)}")
+    for fname in files:
+        df = pd.read_csv(os.path.join(folder_path, fname))
+        scenarios.append(df)
+    
     return scenarios
 
 def get_rainfall_stats(scenario_df: pd.DataFrame, scenario_id: int = None) -> Dict:

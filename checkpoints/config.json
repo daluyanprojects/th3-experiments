@@ -3,12 +3,29 @@
     "patch_size": 4,
     "num_classes": 5,
     "rainfall_timesteps": 13,
+    "num_storm_types": 4,
+    "num_channel_flags": 2,
+    "conditioning_dim": 19,
     "input_channels": 11,
     "training_samples": 224000,
     "test_samples": 96000,
     "num_train_scenarios": 35,
     "num_test_scenarios": 15,
     "patches_per_scenario": 6400,
+    "drain_channels": [
+      3,
+      4,
+      5,
+      6
+    ],
+    "soil_channels": [
+      7,
+      8,
+      9,
+      10
+    ],
+    "rain_min": 0.0,
+    "rain_max": 189.85308837890625,
     "channel_breakdown": {
       "dem": 1,
       "infiltration": 1,
@@ -29,8 +46,8 @@
   },
   "train": {
     "batch_size": 1024,
-    "num_epochs": 50,
-    "num_folds": 5,
+    "num_epochs": 10,
+    "num_folds": 2,
     "lr": 0.0001,
     "weight_decay": 0.05,
     "betas": [

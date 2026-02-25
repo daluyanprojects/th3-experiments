@@ -49,6 +49,7 @@ def create_optimizer(model: nn.Module, cfg: TrainConfig) -> optim.Optimizer:
 def clip_gradients(model: nn.Module, max_norm: float):
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
+
 class WarmupCosineScheduler:
     def __init__(self, optimizer: optim.Optimizer, cfg: TrainConfig):
         self.optimizer     = optimizer
@@ -73,9 +74,9 @@ class WarmupCosineScheduler:
 
 class EarlyStopping:
     def __init__(self, patience: int):
-        self.patience   = patience
-        self.counter    = 0
-        self.best_score = -float('inf')
+        self.patience    = patience
+        self.counter     = 0
+        self.best_score  = -float('inf')
         self.should_stop = False
 
     def __call__(self, score: float) -> bool:
@@ -110,13 +111,13 @@ def train_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, opti
     model.train()
     total_loss, correct, total = 0.0, 0, 0
 
-    for spatial, rainfall, labels in loader:
-        spatial  = spatial.to(device)
-        rainfall = rainfall.to(device)
-        labels   = labels.to(device)
+    for spatial, conditioning, labels in loader:
+        spatial      = spatial.to(device)
+        conditioning = conditioning.to(device)
+        labels       = labels.to(device)
 
-        logits, _ = model(spatial, rainfall)
-        loss      = criterion(logits, labels)
+        logits, _  = model(spatial, conditioning)
+        loss       = criterion(logits, labels)
 
         optimizer.zero_grad()
         loss.backward()
@@ -138,13 +139,13 @@ def validate(model: nn.Module, loader: DataLoader,
     all_preds, all_labels      = [], []
 
     with torch.no_grad():
-        for spatial, rainfall, labels in loader:
-            spatial  = spatial.to(device)
-            rainfall = rainfall.to(device)
-            labels   = labels.to(device)
+        for spatial, conditioning, labels in loader:
+            spatial      = spatial.to(device)
+            conditioning = conditioning.to(device)
+            labels       = labels.to(device)
 
-            logits, _ = model(spatial, rainfall)
-            loss      = criterion(logits, labels)
+            logits, _  = model(spatial, conditioning)
+            loss       = criterion(logits, labels)
 
             total_loss += loss.item()
             pred        = logits.argmax(dim=1)
@@ -158,7 +159,8 @@ def validate(model: nn.Module, loader: DataLoader,
     return total_loss / len(loader), correct / total, macro_f1
 
 
-def train_one_fold(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, fold_idx: int, cfg: TrainConfig, device: str) -> Tuple[Dict, float]:
+def train_one_fold(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
+                   fold_idx: int, cfg: TrainConfig, device: str) -> Tuple[Dict, float]:
     print(f"\n{'='*70}\nFOLD {fold_idx + 1}\n{'='*70}")
 
     # Compute class weights from this fold's training labels
@@ -183,13 +185,13 @@ def train_one_fold(model: nn.Module, train_loader: DataLoader, val_loader: DataL
 
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [],
                'val_acc': [], 'val_macro_f1': [], 'lr': []}
-    best_macro_f1  = -1.0
+    best_macro_f1    = -1.0
     best_model_state = None
 
     for epoch in range(cfg.num_epochs):
         lr = scheduler.step()
 
-        train_loss, train_acc         = train_epoch(model, train_loader, criterion, optimizer, cfg, device)
+        train_loss, train_acc           = train_epoch(model, train_loader, criterion, optimizer, cfg, device)
         val_loss, val_acc, val_macro_f1 = validate(model, val_loader, criterion, device)
 
         history['train_loss'].append(train_loss)
@@ -228,7 +230,7 @@ def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
     for i, (train_scen, val_scen) in enumerate(folds):
         print(f"Fold {i+1}: {len(train_scen)} train scenarios, {len(val_scen)} val scenarios")
 
-    fold_histories: List[Dict] = []
+    fold_histories: List[Dict]  = []
     fold_best_f1s:  List[float] = []
 
     for fold_idx, (train_scenarios, val_scenarios) in enumerate(folds):
@@ -242,7 +244,7 @@ def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
         val_loader   = DataLoader(Subset(full_dataset, val_indices),
                                   batch_size=cfg.batch_size, shuffle=False, num_workers=0)
 
-        fold_model = model().to(device)
+        fold_model       = model().to(device)
         history, best_f1 = train_one_fold(fold_model, train_loader, val_loader, fold_idx, cfg, device)
 
         fold_histories.append(history)
@@ -251,8 +253,8 @@ def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
         save_dir = cfg.output_dir / f'fold_{fold_idx+1}'
         save_dir.mkdir(parents=True, exist_ok=True)
         torch.save({'model_state_dict': fold_model.state_dict(),
-            'best_macro_f1': best_f1,
-            'fold': fold_idx + 1}, save_dir / 'best_model.pt')
+                    'best_macro_f1':    best_f1,
+                    'fold':             fold_idx + 1}, save_dir / 'best_model.pt')
         with open(save_dir / 'history.json', 'w') as f:
             json.dump(history, f, indent=2)
 

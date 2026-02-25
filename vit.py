@@ -4,36 +4,32 @@ import torch
 import torch.nn as nn
 
 
-class RainfallEncoder(nn.Module):
-    def __init__(self, num_timesteps: int, embed_dim: int, hidden_dim: int,
-                 method: str, dropout: float):
+class ConditioningEncoder(nn.Module):
+    """
+    Encodes the (19,) conditioning vector:
+      - 13 rainfall intensities (normalized, temporal)
+      - 4  storm type one-hot
+      - 2  channel availability flags [hasDrainage, hasSoil]
+    Uses MLP instead of Conv1d — the vector is mixed-type, not purely temporal.
+    """
+    def __init__(self, conditioning_dim: int, embed_dim: int, hidden_dim: int, dropout: float):
         super().__init__()
-        self.method        = method
-        self.num_timesteps = num_timesteps
-        self.embed_dim     = embed_dim
-
-        if method == 'conv':
-            self.encoder = nn.Sequential(
-                nn.Conv1d(1, hidden_dim, kernel_size=3, padding=1),
-                nn.GELU(),
-                nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
-                nn.GELU(),
-                nn.AdaptiveAvgPool1d(1),
-                nn.Flatten(),
-            )
-            self.projection = nn.Linear(hidden_dim, embed_dim)
-        else:
-            raise ValueError(f"Unknown rainfall method: {method}. Only 'conv' is supported.")
-
-        self.dropout = nn.Dropout(dropout)
+        self.encoder = nn.Sequential(
+            nn.Linear(conditioning_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+        self.projection = nn.Linear(hidden_dim, embed_dim)
+        self.dropout    = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x   = x.unsqueeze(1)        
-        out = self.encoder(x)        
-        out = self.projection(out)    
+        out = self.encoder(x)      
+        out = self.projection(out)  
         out = self.dropout(out)
-        return out.unsqueeze(1)       
-
+        return out.unsqueeze(1)    
 
 # ── Patch Embedding ───────────────────────────────────────────────────────────
 class PatchEmbedding(nn.Module):
@@ -139,29 +135,28 @@ class ViTFloodClassifier(nn.Module):
         self,
         spatial_channels:   int,
         spatial_patch_size: int,
-        rainfall_timesteps: int,
+        conditioning_dim:   int,    
         num_classes:        int,
         embed_dim:          int,
         num_layers:         int,
         num_heads:          int,
         mlp_ratio:          float,
         dropout:            float,
-        rainfall_method:    str,
+        rainfall_method:    str,     
         learnable_pos_enc:  bool,
         rainfall_hidden:    int,
     ):
         super().__init__()
-        self.patch_size    = spatial_patch_size
-        self.embed_dim     = embed_dim
-        self.num_classes   = num_classes
-        self.num_timesteps = rainfall_timesteps
+        self.patch_size      = spatial_patch_size
+        self.embed_dim       = embed_dim
+        self.num_classes     = num_classes
+        self.conditioning_dim = conditioning_dim 
 
-        self.patch_embedding  = PatchEmbedding(spatial_channels, spatial_patch_size, embed_dim)
-        self.rainfall_encoder = RainfallEncoder(rainfall_timesteps, embed_dim,
-                                                rainfall_hidden, rainfall_method, dropout)
-        self.pos_encoding     = PositionalEncoding(2, embed_dim, learnable_pos_enc)
-        self.transformer      = TransformerEncoder(num_layers, embed_dim, num_heads, mlp_ratio, dropout)
-        self.classifier       = ClassificationHead(embed_dim, num_classes, dropout)
+        self.patch_embedding      = PatchEmbedding(spatial_channels, spatial_patch_size, embed_dim)
+        self.conditioning_encoder = ConditioningEncoder(conditioning_dim, embed_dim, rainfall_hidden, dropout)
+        self.pos_encoding  = PositionalEncoding(2, embed_dim, learnable_pos_enc)
+        self.transformer   = TransformerEncoder(num_layers, embed_dim, num_heads, mlp_ratio, dropout)
+        self.classifier    = ClassificationHead(embed_dim, num_classes, dropout)
 
         self.apply(self._init_weights)
 
@@ -178,11 +173,11 @@ class ViTFloodClassifier(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, spatial_patch: torch.Tensor, rainfall_sequence: torch.Tensor,
+    def forward(self, spatial_patch: torch.Tensor, conditioning: torch.Tensor,  
                 return_attention: bool = False) -> Tuple[torch.Tensor, Optional[List]]:
-        patch_token = self.patch_embedding(spatial_patch)      
-        rain_token  = self.rainfall_encoder(rainfall_sequence)
-        tokens      = torch.cat([rain_token, patch_token], dim=1)  
+        patch_token = self.patch_embedding(spatial_patch)
+        cond_token  = self.conditioning_encoder(conditioning)                   
+        tokens      = torch.cat([cond_token, patch_token], dim=1)
         tokens      = self.pos_encoding(tokens)
         encoded, attn_maps = self.transformer(tokens, return_attention=return_attention)
         logits      = self.classifier(encoded)
@@ -200,12 +195,11 @@ def get_model_summary(model: ViTFloodClassifier) -> str:
         "=" * 70,
         "MODEL SUMMARY",
         "=" * 70,
-        f"Model             : {model.__class__.__name__}",
-        f"Total parameters  : {total:,}",
-        f"Trainable         : {trainable:,}",
-        f"Non-trainable     : {total - trainable:,}",
-        f"Rainfall timesteps: {model.num_timesteps}",
-        f"Rainfall method   : {model.rainfall_encoder.method}",
+        f"Model              : {model.__class__.__name__}",
+        f"Total parameters   : {total:,}",
+        f"Trainable          : {trainable:,}",
+        f"Non-trainable      : {total - trainable:,}",
+        f"Conditioning dim   : {model.conditioning_dim}",  
         "=" * 70,
     ]
     return "\n".join(lines)

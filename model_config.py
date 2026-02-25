@@ -7,7 +7,7 @@ def make_model(data_cfg: DatasetConfig, model_cfg: ModelConfig) -> ViTFloodClass
         spatial_channels   = data_cfg.input_channels,
         spatial_patch_size = data_cfg.patch_size,
         num_classes        = data_cfg.num_classes,
-        rainfall_timesteps = data_cfg.rainfall_timesteps,
+        conditioning_dim   = data_cfg.conditioning_dim,  
         embed_dim          = model_cfg.embed_dim,
         num_layers         = model_cfg.num_layers,
         num_heads          = model_cfg.num_heads,
@@ -21,7 +21,6 @@ def make_model(data_cfg: DatasetConfig, model_cfg: ModelConfig) -> ViTFloodClass
 
 def model_factory(data_cfg: DatasetConfig, model_cfg: ModelConfig):
     return lambda: make_model(data_cfg, model_cfg)
-
 
 def print_model_details(model: ViTFloodClassifier, data_cfg: DatasetConfig,
                         channel_names: list):
@@ -50,6 +49,11 @@ def print_model_details(model: ViTFloodClassifier, data_cfg: DatasetConfig,
         else:
             print(f"  [{idx:2d}-{idx+n-1:2d}]   {group_name} × {n}  {names}")
         idx += n
+
+    print(f"\nConditioning vector — {data_cfg.conditioning_dim} dims:")   # CHANGED
+    print(f"  Rainfall sequence : {data_cfg.rainfall_timesteps} timesteps")
+    print(f"  Storm type        : {data_cfg.num_storm_types} (one-hot)")
+    print(f"  Channel flags     : {data_cfg.num_channel_flags} [hasDrainage, hasSoil]")
 
     print(f"\nTransformer: {len(model.transformer.layers)} layers  |  "
           f"embed={model.embed_dim}  |  "

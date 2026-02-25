@@ -3,30 +3,50 @@ from pathlib import Path
 from typing import Dict, Optional
 import json
 
+
 # ── Dataset info ──────────────────────────────────────────────────────────────
 @dataclass
 class DatasetConfig:
     patch_size:           int  = 4
     num_classes:          int  = 5
     rainfall_timesteps:   int  = 13
+    num_storm_types:      int  = 4
+    num_channel_flags:    int  = 2
+    conditioning_dim:     int  = 19
     input_channels:       int  = None
     training_samples:     int  = None
     test_samples:         int  = None
     num_train_scenarios:  int  = None
     num_test_scenarios:   int  = None
     patches_per_scenario: int  = None
+    drain_channels:       list = field(default_factory=lambda: list(range(3, 7)))  
+    soil_channels:        list = field(default_factory=lambda: list(range(7, 11))) 
+    rain_min:             float = 0.0                                              
+    rain_max:             float = 189.8531                                        
     channel_breakdown:    Dict = field(default_factory=dict)
 
     def populate(self, spatial_patches, train_dataset, test_dataset,
-                 train_data, drainage_resized, soil_resized):
+                 train_data, drainage_resized, soil_resized,
+                 rain_min: float, rain_max: float,                  
+                 drain_channels: list, soil_channels: list):        
+
         self.patch_size           = spatial_patches.shape[-1]
         self.input_channels       = spatial_patches.shape[1]
-        self.rainfall_timesteps   = train_data['rainfall_sequences'][0].shape[0]
         self.training_samples     = train_dataset['total_samples']
         self.test_samples         = test_dataset['total_samples']
         self.num_train_scenarios  = train_dataset['num_scenarios']
         self.num_test_scenarios   = test_dataset['num_scenarios']
         self.patches_per_scenario = train_dataset['patches_per_scenario']
+
+        rain_and_type_dim         = train_dataset['rain_and_type'].shape[-1]
+        self.conditioning_dim     = rain_and_type_dim + self.num_channel_flags
+        self.rainfall_timesteps   = self.conditioning_dim - self.num_storm_types - self.num_channel_flags
+
+        self.drain_channels       = drain_channels   
+        self.soil_channels        = soil_channels     
+        self.rain_min             = rain_min        
+        self.rain_max             = rain_max         
+
         self.channel_breakdown    = {
             'dem':          1,
             'infiltration': 1,
@@ -43,8 +63,11 @@ class DatasetConfig:
             print(f"  {k:<25}: {v}")
         print(f"\n✓ {self.input_channels} channels, "
               f"patch_size={self.patch_size}, "
-              f"timesteps={self.rainfall_timesteps}")
-
+              f"conditioning_dim={self.conditioning_dim} "
+              f"(rainfall={self.rainfall_timesteps} + storm_type={self.num_storm_types} + flags={self.num_channel_flags})")
+        print(f"  rain_min={self.rain_min:.4f}  rain_max={self.rain_max:.4f}")
+        print(f"  drain_channels={self.drain_channels}")
+        print(f"  soil_channels={self.soil_channels}")
 
 # ── Model architecture ────────────────────────────────────────────────────────
 @dataclass
@@ -63,8 +86,8 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     batch_size:          int   = 1024
-    num_epochs:          int   = 50
-    num_folds:           int   = 5
+    num_epochs:          int   = 10
+    num_folds:           int   = 2
     lr:                  float = 1e-4
     weight_decay:        float = 0.05
     betas:               tuple = (0.9, 0.999)
