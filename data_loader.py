@@ -8,7 +8,7 @@ import numpy as np
 from typing import Optional, Tuple, List
 import glob
 from pathlib import Path
-
+import re
 
 def load_dem(file_path: str) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
@@ -205,15 +205,6 @@ def print_raster_stats(stats: Dict):
     print(f"Valid pixels:  {stats['valid_pixels']:,} / {stats['total_pixels']:,}")
     print(f"{'='*60}\n")
 
-def load_rainfall_scenario(file_path: str, scenario_id: int = None) -> pd.DataFrame:
-    df = pd.read_csv(file_path)
-    
-    if scenario_id is not None:
-        print(f"Rainfall Scenario {scenario_id} loaded: {len(df)} time steps")
-    else:
-        print(f"Rainfall scenario loaded: {len(df)} time steps")
-    return df
-
 def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.ndarray], List[Dict]]:
     flood_maps = []
     flood_metadata = []
@@ -232,16 +223,30 @@ def load_all_flood_maps(flood_dir: str, num_scenarios: int) -> Tuple[List[np.nda
     print(f"\nTotal flood maps loaded: {len(flood_maps)}")
     return flood_maps, flood_metadata
 
-def load_all_rainfall_scenarios(rainfall_dir: str) -> List[pd.DataFrame]:
+def load_rainfall_scenario(file_path: str, scenario_id: int = None) -> pd.DataFrame:
+    df = pd.read_csv(file_path)
+    
+    if scenario_id is not None:
+        print(f"Rainfall Scenario {scenario_id} loaded: {len(df)} time steps")
+    else:
+        print(f"Rainfall scenario loaded: {len(df)} time steps")
+    return df
+
+
+def load_all_rainfall_scenarios(folder_path: str) -> List[pd.DataFrame]:
+    files = [
+        f for f in os.listdir(folder_path)
+        if re.search(r'Scenario_(\d+)_mmhr', f)
+    ]
+
+    # Sort NUMERICALLY by extracted scenario ID — fixes lexicographic misalignment
+    files.sort(key=lambda f: int(re.search(r'Scenario_(\d+)_mmhr', f).group(1)))
+
     scenarios = []
-
-    for file in os.listdir(rainfall_dir):
-        if file.endswith(".csv") and "Rainfall_Scenario" in file:
-            file_path = os.path.join(rainfall_dir, file)
-
-            scenario_id = int(file.split("_")[2])
-            df = load_rainfall_scenario(file_path, scenario_id=scenario_id)
-            scenarios.append(df)
+    for fname in files:
+        scenario_id = int(re.search(r'Scenario_(\d+)_mmhr', fname).group(1))
+        df = load_rainfall_scenario(os.path.join(folder_path, fname), scenario_id=scenario_id)
+        scenarios.append(df)
 
     print(f"\nTotal rainfall scenarios loaded: {len(scenarios)}")
     return scenarios

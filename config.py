@@ -13,14 +13,15 @@ class ModelConfig:
     mlp_ratio:         float = 2.0
     dropout:           float = 0.1
     learnable_pos_enc: bool  = True
-    rainfall_method:   str   = 'conv'
-    num_timesteps:     int   = 26
+    rainfall_method:   str   = 'hybrid'    
+    num_timesteps:     int   = 13      
+    conditioning_dim:  int   = 19       
     rainfall_hidden:   int   = 64
 
 @dataclass
 class TrainConfig:
-    batch_size:       int   = 1024
-    num_epochs:       int   = 10
+    batch_size:       int   = 256
+    num_epochs:       int   = 2
     num_folds:        int   = 2
     lr:               float = 3e-4
     weight_decay:     float = 1e-4

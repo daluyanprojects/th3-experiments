@@ -5,44 +5,60 @@ from typing import Optional, Tuple, List
 import math
 
 
-class RainfallEncoder(nn.Module):
+class ConditioningEncoder(nn.Module):
+    """
+    Encodes the (19,) heterogeneous conditioning vector:
+      [0:13]  normalized rainfall  → Conv1d branch (preserves temporal order)
+      [13:17] storm type one-hot   ┐
+      [17]    r (tpeak fraction)   ├→ MLP branch (categorical / scalar)
+      [18]    normalized depth     ┘
+    """
     def __init__(
         self,
-        num_timesteps: int,
-        embed_dim: int,
-        hidden_dim: int,
-        method: str,
-        dropout: float,
+        num_timesteps:    int = 13,
+        conditioning_dim: int = 19,
+        hidden:           int = 64,
+        embed_dim:        int = 256,
     ):
         super().__init__()
-        self.method = method
+
         self.num_timesteps = num_timesteps
-        self.embed_dim = embed_dim
+        cat_dim = conditioning_dim - num_timesteps   # 19 - 13 = 6
 
-        if method == 'conv':
-            self.encoder = nn.Sequential(
-                nn.Conv1d(1, hidden_dim, kernel_size=3, padding=1),
-                nn.GELU(),
-                nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
-                nn.GELU(),
-                nn.AdaptiveAvgPool1d(1),
-                nn.Flatten(),                    
-            )
-            self.projection = nn.Linear(hidden_dim, embed_dim)
+        # Temporal branch — rain sequence
+        self.rain_enc = nn.Sequential(
+            nn.Conv1d(1, hidden, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv1d(hidden, hidden, kernel_size=3, padding=1),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),                            # → (B, hidden)
+        )
 
-        else:
-            raise ValueError(f"Unknown rainfall method: {method}. Choose 'mlp', 'conv', or 'attn'.")
+        # Categorical branch — onehot(4) + r(1) + depth_norm(1)
+        self.cat_enc = nn.Sequential(
+            nn.Linear(cat_dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, hidden),
+        )                                            # → (B, hidden)
 
-        self.dropout = nn.Dropout(dropout)
+        # Fusion → embed_dim
+        self.fusion = nn.Sequential(
+            nn.Linear(hidden * 2, embed_dim),
+            nn.GELU(),
+            nn.LayerNorm(embed_dim),
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.method == 'conv':
-            x = x.unsqueeze(1)                            
-            out = self.encoder(x)                         
-            out = self.projection(out)                    
+    def forward(self, cond: torch.Tensor) -> torch.Tensor:
+        # cond: (B, 19)
+        rain = cond[:, :self.num_timesteps].unsqueeze(1)   # (B, 1, 13)
+        cat  = cond[:, self.num_timesteps:]                # (B, 6)
 
-        out = self.dropout(out)
-        return out.unsqueeze(1)                          
+        rain_feat = self.rain_enc(rain)    # (B, hidden)
+        cat_feat  = self.cat_enc(cat)      # (B, hidden)
+
+        return self.fusion(
+            torch.cat([rain_feat, cat_feat], dim=1)        # (B, hidden*2)
+        )                                                   # → (B, embed_dim)
 
 
 class PatchEmbedding(nn.Module):
@@ -56,23 +72,29 @@ class PatchEmbedding(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.projection(x)    # (batch, embed_dim, 1, 1)
-        x = x.flatten(2)         # (batch, embed_dim, 1)
-        x = x.transpose(1, 2)    # (batch, 1, embed_dim)
+        x = self.projection(x)    # (B, embed_dim, 1, 1)
+        x = x.flatten(2)          # (B, embed_dim, 1)
+        x = x.transpose(1, 2)     # (B, 1, embed_dim)
         return x
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, num_positions: int, embed_dim: int, learnable: bool = True):
         super().__init__()
         if learnable:
-            self.pos_embedding = nn.Parameter(torch.randn(1, num_positions, embed_dim) * 0.02)
+            self.pos_embedding = nn.Parameter(
+                torch.randn(1, num_positions, embed_dim) * 0.02
+            )
         else:
-            pos_embedding = self._sinusoidal(num_positions, embed_dim)
-            self.register_buffer('pos_embedding', pos_embedding)
+            self.register_buffer(
+                'pos_embedding', self._sinusoidal(num_positions, embed_dim)
+            )
 
     def _sinusoidal(self, num_positions: int, embed_dim: int) -> torch.Tensor:
         position = torch.arange(num_positions).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() * (-math.log(10000.0) / embed_dim))
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * (-math.log(10000.0) / embed_dim)
+        )
         pe = torch.zeros(1, num_positions, embed_dim)
         pe[0, :, 0::2] = torch.sin(position * div_term)
         pe[0, :, 1::2] = torch.cos(position * div_term)
@@ -80,6 +102,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.pos_embedding
+
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float, dropout: float):
@@ -147,47 +170,73 @@ class ClassificationHead(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        patch_token = x[:, 1, :]        
-        return self.mlp(patch_token)    
+        patch_token = x[:, 1, :]      # index 1 = patch token
+        return self.mlp(patch_token)
+
 
 class ViT(nn.Module):
     def __init__(
         self,
-        in_channels: int,
-        patch_size: int,
-        num_classes: int,
-        embed_dim: int,
-        num_layers: int ,
-        num_heads: int ,
-        mlp_ratio: float ,
-        dropout: float ,
+        in_channels:       int,
+        patch_size:        int,
+        num_classes:       int,
+        embed_dim:         int,
+        num_layers:        int,
+        num_heads:         int,
+        mlp_ratio:         float,
+        dropout:           float,
         learnable_pos_enc: bool,
-        rainfall_method: str ,
-        num_timesteps: int ,
-        rainfall_hidden: int ,
+        rainfall_method:   str,       # kept for config compatibility, unused internally
+        num_timesteps:     int,
+        conditioning_dim:  int,       # ← NEW: full conditioning vector size (19)
+        rainfall_hidden:   int,
     ):
         super().__init__()
 
-        self.patch_size = patch_size
-        self.embed_dim = embed_dim
-        self.num_classes = num_classes
-        self.num_timesteps = num_timesteps
+        self.patch_size       = patch_size
+        self.embed_dim        = embed_dim
+        self.num_classes      = num_classes
+        self.num_timesteps    = num_timesteps
+        self.conditioning_dim = conditioning_dim
+        self.rainfall_method  = rainfall_method   # stored for summary only
 
         # 1. Spatial patch → token
-        self.patch_embedding = PatchEmbedding(in_channels=in_channels, patch_size=patch_size, embed_dim=embed_dim)
+        self.patch_embedding = PatchEmbedding(
+            in_channels=in_channels,
+            patch_size=patch_size,
+            embed_dim=embed_dim,
+        )
 
-        # 2. Rainfall sequence → conditioning token
-        self.rainfall_encoder = RainfallEncoder(num_timesteps=num_timesteps, embed_dim=embed_dim, hidden_dim=rainfall_hidden,
-                                                method=rainfall_method, dropout=dropout)
+        # 2. Conditioning vector (19,) → token
+        self.conditioning_encoder = ConditioningEncoder(   # ← was rainfall_encoder
+            num_timesteps    = num_timesteps,
+            conditioning_dim = conditioning_dim,
+            hidden           = rainfall_hidden,
+            embed_dim        = embed_dim,
+        )
 
-        # 3. Positional encoding over 2 tokens: [rainfall, patch]
-        self.pos_encoding = PositionalEncoding(num_positions=2, embed_dim=embed_dim, learnable=learnable_pos_enc)
+        # 3. Positional encoding over 2 tokens: [cond_token, patch_token]
+        self.pos_encoding = PositionalEncoding(
+            num_positions=2,
+            embed_dim=embed_dim,
+            learnable=learnable_pos_enc,
+        )
 
         # 4. Transformer encoder
-        self.transformer = TransformerEncoder(num_layers=num_layers, embed_dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, dropout=dropout)
+        self.transformer = TransformerEncoder(
+            num_layers=num_layers,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+        )
 
         # 5. Classification head (reads patch token at index 1)
-        self.classifier = ClassificationHead(embed_dim=embed_dim, num_classes=num_classes, dropout=dropout)
+        self.classifier = ClassificationHead(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            dropout=dropout,
+        )
 
         self.apply(self._init_weights)
 
@@ -204,18 +253,30 @@ class ViT(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, spatial_patch: torch.Tensor, rainfall_sequence: torch.Tensor, return_attention: bool = False) -> Tuple[torch.Tensor, Optional[List]]:
-        patch_token = self.patch_embedding(spatial_patch)
-        rain_token = self.rainfall_encoder(rainfall_sequence)
-        tokens = torch.cat([rain_token, patch_token], dim=1)
-        tokens = self.pos_encoding(tokens)
+    def forward(
+        self,
+        spatial_patch:      torch.Tensor,         # (B, C, H, W)
+        conditioning_vec:   torch.Tensor,         # (B, 19)
+        return_attention:   bool = False,
+    ) -> Tuple[torch.Tensor, Optional[List]]:
+
+        patch_token = self.patch_embedding(spatial_patch)           # (B, 1, D)
+        cond_token  = self.conditioning_encoder(conditioning_vec)   # (B, D)
+        cond_token  = cond_token.unsqueeze(1)                       # (B, 1, D)
+
+        tokens  = torch.cat([cond_token, patch_token], dim=1)       # (B, 2, D)
+        tokens  = self.pos_encoding(tokens)
+
         encoded, attn_maps = self.transformer(tokens, return_attention=return_attention)
-        logits = self.classifier(encoded)
+        logits  = self.classifier(encoded)                          # (B, num_classes)
+
         return logits, attn_maps if return_attention else None
 
 
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
 def count_parameters(model: nn.Module) -> Tuple[int, int]:
-    total = sum(p.numel() for p in model.parameters())
+    total     = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
 
@@ -224,7 +285,7 @@ def get_model_summary(model: ViT) -> str:
     total, trainable = count_parameters(model)
     lines = [
         "=" * 70,
-        "VIT — MODEL SUMMARY",
+        "ViT — MODEL SUMMARY",
         "=" * 70,
         f"  Spatial channels   : {model.patch_embedding.projection.in_channels}",
         f"  Patch size         : {model.patch_size}×{model.patch_size}",
@@ -232,9 +293,10 @@ def get_model_summary(model: ViT) -> str:
         f"  Embed dim (D)      : {model.embed_dim}",
         f"  Transformer layers : {len(model.transformer.layers)}",
         f"  Attention heads    : {model.transformer.layers[0].attention.num_heads}",
-        f"  Rainfall timesteps : {model.num_timesteps}",
-        f"  Rainfall method    : {model.rainfall_encoder.method}",
-        f"  Token sequence     : [rainfall_token | patch_token]  (length 2)",
+        f"  Conditioning dim   : {model.conditioning_dim}",
+        f"     └ rainfall(13) + onehot(4) + r(1) + depth_norm(1)",
+        f"  Rainfall method    : {model.rainfall_method}",
+        f"  Token sequence     : [cond_token | patch_token]  (length 2)",
         f"  Classification on  : patch token (index 1)",
         "-" * 70,
         f"  Total parameters   : {total:,}",

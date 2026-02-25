@@ -65,34 +65,42 @@ def prepare_ground_truth(y_test: np.ndarray, quadrant_indices: Dict, patch_metad
     print(f"  GT maps shape : {gt_maps.shape}  ✓")
     return {'flat': y_test, 'maps': gt_maps, 'n_h': n_h, 'n_w': n_w}
 
-def predict_scenario(model, X_test, rain_normalized, scenario_idx, batch_size, device) -> np.ndarray:
+def predict_scenario(model, X_test, rain_normalized, scenario_idx, batch_size, device):
     model.eval()
     X_t    = torch.tensor(X_test, dtype=torch.float32).permute(0, 3, 1, 2)
     rain_t = (torch.tensor(rain_normalized[scenario_idx], dtype=torch.float32)
               .unsqueeze(0).expand(len(X_test), -1))
     loader = DataLoader(TensorDataset(X_t, rain_t), batch_size=batch_size, shuffle=False)
-    preds  = []
+    preds, confs = [], []
     with torch.no_grad():
         for sp, ra in loader:
             logits, _ = model(sp.to(device), ra.to(device))
-            preds.append(logits.argmax(1).cpu().numpy())
-    return np.concatenate(preds)
+            probs     = torch.softmax(logits, dim=1)
+            preds.append(probs.argmax(1).cpu().numpy())
+            confs.append(probs.max(1).values.cpu().numpy())
+    return np.concatenate(preds), np.concatenate(confs)
 
-def evaluate_all_scenarios(model, X_test, y_test, rain_normalized, ground_truth, batch_size, device, num_classes) -> Dict:
+def evaluate_all_scenarios(model, X_test, y_test, conditioning_vectors, ground_truth, batch_size, device, num_classes) -> Dict:
     print("\nEvaluating all test scenarios...")
-    N_scenarios = rain_normalized.shape[0]
+    N_scenarios = conditioning_vectors.shape[0]
     n_h, n_w    = ground_truth['n_h'], ground_truth['n_w']
     per_scenario, pred_maps = [], np.zeros((N_scenarios, n_h, n_w), dtype=np.int8)
 
+    conf_maps = np.zeros((N_scenarios, n_h, n_w), dtype=np.float32)   # NEW
+
     for s in range(N_scenarios):
-        preds  = predict_scenario(model, X_test, rain_normalized, s, batch_size, device)
+        preds, confs = predict_scenario(model, X_test, conditioning_vectors, s, batch_size, device)
         labels = ground_truth['flat'][s]
         m      = compute_metrics(labels, preds, num_classes)
-        per_scenario.append({'scenario_id': s + 1, **m, 'preds_flat': preds})
+        per_scenario.append({'scenario_id': s + 1, **m,
+                             'preds_flat': preds, 'confs_flat': confs})   # confs added
         pred_maps[s] = preds.reshape(n_h, n_w)
+        conf_maps[s] = confs.reshape(n_h, n_w)                           # NEW
+        frac_low = (confs < 0.5).mean() * 100
         print(f"  RS{s+1:02d}  Acc={m['accuracy']:.4f}  Prec={m['precision_macro']:.4f}  "
-              f"Rec={m['recall_macro']:.4f}  F1={m['f1_macro']:.4f}  IoU={m['iou_macro']:.4f}")
-
+              f"Rec={m['recall_macro']:.4f}  F1={m['f1_macro']:.4f}  IoU={m['iou_macro']:.4f}"
+              f"  Conf={confs.mean():.3f}  Uncertain={frac_low:.1f}%")
+        
     def agg(key):
         v = [r[key] for r in per_scenario]
         return float(np.mean(v)), float(np.std(v))
@@ -127,6 +135,7 @@ def evaluate_all_scenarios(model, X_test, y_test, rain_normalized, ground_truth,
         'per_scenario': per_scenario,
         'aggregate':    aggregate,
         'pred_maps':    pred_maps,
+        'conf_maps':    conf_maps,          
         'gt_maps':      ground_truth['maps'],
         'n_h': n_h, 'n_w': n_w,
     }
@@ -378,4 +387,117 @@ def plot_best_worst_dem(dem_q3:   np.ndarray, results:  Dict, figsize:  tuple = 
     fig.legend(handles=patches, loc='lower center', ncol=5,
                fontsize=9, bbox_to_anchor=(0.5, -0.04))
     plt.tight_layout()
+    return fig
+
+def plot_confidence_on_dem(
+    dem_q3      : np.ndarray,
+    conf_map    : np.ndarray,  
+    scenario_id : int,
+    config_label: str,
+    confs_flat  : np.ndarray,   
+    figsize     : tuple = (9, 11),
+    inset_center: tuple = None,
+    inset_size  : int   = 60,
+) -> plt.Figure:
+    H, W     = dem_q3.shape
+    n_h, n_w = conf_map.shape
+
+    # ── Upsample confidence map to DEM resolution ─────────────────────────────
+    ph = H / n_h
+    pw = W / n_w
+    conf_full = np.zeros((H, W), dtype=np.float32)
+    for i in range(n_h):
+        for j in range(n_w):
+            r0, r1 = int(i * ph), int((i+1) * ph)
+            c0, c1 = int(j * pw), int((j+1) * pw)
+            conf_full[r0:r1, c0:c1] = conf_map[i, j]
+
+    # ── Inset center: default to region of lowest confidence ─────────────────
+    if inset_center is None:
+        low_patches = np.argwhere(conf_map < 0.5)
+        if len(low_patches) > 0:
+            pc = low_patches[len(low_patches) // 2]
+            inset_center = (int(pc[0] * ph + ph/2), int(pc[1] * pw + pw/2))
+        else:
+            inset_center = (H//2, W//2)
+
+    ic_r, ic_c = inset_center
+    iz  = inset_size
+    ir0 = max(0, ic_r - iz); ir1 = min(H, ic_r + iz)
+    ic0 = max(0, ic_c - iz); ic1 = min(W, ic_c + iz)
+
+    dem_p2, dem_p98 = np.percentile(dem_q3, 2), np.percentile(dem_q3, 98)
+    frac_low        = (confs_flat < 0.5).mean() * 100
+
+    fig = plt.figure(figsize=figsize, facecolor='#1a1a1a')
+    ax  = fig.add_axes([0.08, 0.08, 0.72, 0.84], facecolor='#1a1a1a')
+
+    # Layer 1: DEM
+    dem_im = ax.imshow(dem_q3, cmap='terrain', vmin=dem_p2, vmax=dem_p98,
+                       origin='upper', interpolation='bilinear', alpha=0.5)
+
+    # Layer 2: Confidence heatmap
+    conf_im = ax.imshow(conf_full, cmap='RdYlGn', vmin=0.0, vmax=1.0,
+                        origin='upper', interpolation='nearest', alpha=0.65)
+
+    # Layer 3: Uncertain patch overlay (conf < 0.5)
+    uncertain = conf_full.copy()
+    uncertain[conf_full >= 0.5] = np.nan
+    uncertain[conf_full <  0.5] = 1.0
+    ax.imshow(uncertain, cmap='cool', vmin=0, vmax=1, alpha=0.35,
+              origin='upper', interpolation='nearest')
+
+    # Inset marker
+    from matplotlib.patches import Rectangle
+    rect = Rectangle((ic0, ir0), ic1-ic0, ir1-ir0,
+                     linewidth=2, edgecolor='red', facecolor='none', zorder=5)
+    ax.add_patch(rect)
+
+    # Axes styling
+    ax.set_xlabel("Column (West  ->  East)", fontsize=9, color='white')
+    ax.set_ylabel("Row (North  ->  South)",  fontsize=9, color='white')
+    ax.tick_params(labelsize=8, colors='white')
+    for spine in ax.spines.values():
+        spine.set_edgecolor('white')
+
+    title = (f"Metro Manila Q3 — Model Confidence  (RS{scenario_id})\n"
+             f"{config_label}\n"
+             f"Mean={confs_flat.mean():.3f}  Std={confs_flat.std():.3f}  "
+             f"Min={confs_flat.min():.3f}  Uncertain={frac_low:.1f}%")
+    ax.set_title(title, fontsize=10, fontweight='bold', pad=10, color='white')
+
+    # ── DEM colorbar ──────────────────────────────────────────────────────────
+    cbar_ax1 = fig.add_axes([0.82, 0.55, 0.025, 0.37])
+    cbar1    = fig.colorbar(dem_im, cax=cbar_ax1)
+    cbar1.set_label("Elevation (m)", fontsize=8, color='white')
+    cbar1.ax.tick_params(labelsize=7, colors='white')
+    plt.setp(cbar1.ax.yaxis.get_ticklabels(), color='white')
+
+    # ── Confidence colorbar ───────────────────────────────────────────────────
+    cbar_ax2 = fig.add_axes([0.82, 0.10, 0.025, 0.37])
+    cbar2    = fig.colorbar(conf_im, cax=cbar_ax2)
+    cbar2.set_label("Confidence", fontsize=8, color='white')
+    cbar2.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    cbar2.ax.tick_params(labelsize=7, colors='white')
+    plt.setp(cbar2.ax.yaxis.get_ticklabels(), color='white')
+    cbar2.ax.axhline(y=0.5, color='white', linewidth=1.2, linestyle='--')
+    cbar2.ax.text(2.5, 0.5, 'uncertain\nthreshold',
+                  fontsize=6, va='center', color='white')
+
+    # ── Inset zoom panel ──────────────────────────────────────────────────────
+    inset_ax = fig.add_axes([0.44, 0.08, 0.28, 0.28], facecolor='#1a1a1a')
+    inset_ax.imshow(dem_q3[ir0:ir1, ic0:ic1], cmap='terrain',
+                    vmin=dem_p2, vmax=dem_p98, origin='upper',
+                    interpolation='bilinear', alpha=0.5)
+    inset_ax.imshow(conf_full[ir0:ir1, ic0:ic1], cmap='RdYlGn',
+                    vmin=0.0, vmax=1.0, origin='upper',
+                    interpolation='nearest', alpha=0.65)
+    unc_inset = uncertain[ir0:ir1, ic0:ic1]
+    inset_ax.imshow(unc_inset, cmap='cool', alpha=0.35,
+                    vmin=0, vmax=1, origin='upper', interpolation='nearest')
+    inset_ax.set_xticks([]); inset_ax.set_yticks([])
+    for spine in inset_ax.spines.values():
+        spine.set_edgecolor('red')
+        spine.set_linewidth(2)
+
     return fig

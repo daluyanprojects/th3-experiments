@@ -14,6 +14,7 @@ def make_model(model_cfg: ModelConfig) -> ViT:
         learnable_pos_enc = model_cfg.learnable_pos_enc,
         rainfall_method   = model_cfg.rainfall_method,
         num_timesteps     = model_cfg.num_timesteps,
+        conditioning_dim  = model_cfg.conditioning_dim,
         rainfall_hidden   = model_cfg.rainfall_hidden,
     )
 

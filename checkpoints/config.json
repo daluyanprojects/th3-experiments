@@ -9,13 +9,14 @@
     "mlp_ratio": 2.0,
     "dropout": 0.1,
     "learnable_pos_enc": true,
-    "rainfall_method": "conv",
-    "num_timesteps": 26,
+    "rainfall_method": "hybrid",
+    "num_timesteps": 13,
+    "conditioning_dim": 19,
     "rainfall_hidden": 64
   },
   "train": {
-    "batch_size": 1024,
-    "num_epochs": 10,
+    "batch_size": 256,
+    "num_epochs": 2,
     "num_folds": 2,
     "lr": 0.0003,
     "weight_decay": 0.0001,
