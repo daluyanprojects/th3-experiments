@@ -1,6 +1,3 @@
-# th3-experiments
-# FloodCast — Metro Manila Flood Prediction Pipeline
-### Deep Learning-Based Flood Inundation Mapping with Rainfall Conditioning
 
 ---
 
