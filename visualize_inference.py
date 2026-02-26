@@ -112,16 +112,6 @@ def plot_confidence(result, engine, save_path=None):
     cbar.set_label('Confidence', fontsize=9)
     axes[1].axis('off')
 
-    # Confidence histogram inset
-    ax_inset = axes[1].inset_axes([0.02, 0.02, 0.35, 0.25])
-    ax_inset.hist(result['confidence'], bins=30, color='steelblue', edgecolor='none')
-    ax_inset.axvline(result['confidence'].mean(), color='red', lw=1.5, label='mean')
-    ax_inset.set_xlabel('Conf', fontsize=7)
-    ax_inset.set_ylabel('N', fontsize=7)
-    ax_inset.tick_params(labelsize=6)
-    ax_inset.legend(fontsize=6)
-    ax_inset.patch.set_alpha(0.7)
-
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')

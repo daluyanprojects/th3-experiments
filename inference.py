@@ -131,12 +131,11 @@ def _run_forward(
 
     all_preds, all_probs = [], []
     for sp_b, rf_b, cd_b in dl:
-        output = engine.model(
+        logits, _ = engine.model(
             sp_b.to(engine.device),
             rf_b.to(engine.device),
             cd_b.to(engine.device),
-        )
-        logits = output[0] if isinstance(output, tuple) else output  # (B, 5)
+        )    
         probs  = F.softmax(logits, dim=1).cpu().numpy()              # (B, 5)
         preds  = probs.argmax(axis=1)                   # (B,)
         all_probs.append(probs)
