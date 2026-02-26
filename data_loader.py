@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Optional, Tuple, List
+import re
 
 def load_dem(file_path: str) -> Tuple[np.ndarray, Dict]:
     with rasterio.open(file_path) as src:
@@ -179,21 +180,20 @@ def load_rainfall_scenario(file_path: str, scenario_id: int = None) -> pd.DataFr
         print(f"Rainfall scenario loaded: {len(df)} time steps")
     return df
 
-
-def load_all_rainfall_scenarios(rainfall_dir: str, num_scenarios: int) -> List[pd.DataFrame]:
-    scenarios = []
+def load_all_rainfall_scenarios(folder_path: str) -> List[pd.DataFrame]:
+    files = [
+        f for f in os.listdir(folder_path)
+        if re.search(r'Scenario_(\d+)_mmhr', f)
+    ]
     
-    for i in range(1, num_scenarios + 1):
-        file_path = os.path.join(rainfall_dir, f"Rainfall_Scenario_{i}_mmhr.csv")
-        
-        if not os.path.exists(file_path):
-            print(f"Warning: {file_path} not found, skipping...")
-            continue
-        
-        df = load_rainfall_scenario(file_path, scenario_id=i)
+    # Sort NUMERICALLY by scenario ID — not lexicographically
+    files.sort(key=lambda f: int(re.search(r'Scenario_(\d+)_mmhr', f).group(1)))
+    
+    scenarios = []
+    for fname in files:
+        df = pd.read_csv(os.path.join(folder_path, fname))
         scenarios.append(df)
     
-    print(f"\nTotal rainfall scenarios loaded: {len(scenarios)}")
     return scenarios
 
 

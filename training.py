@@ -1,9 +1,6 @@
-# training.py
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 import numpy as np
 from pathlib import Path
@@ -17,13 +14,57 @@ from collections import defaultdict
 import copy, json, time, sys
 import torch.nn.functional as F
 
-from vit import ViTFloodClassifier
-from config import TrainConfig
+from vit import ViTFloodClassifier  
+from config import TrainConfig     
 
 DEVICE  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 USE_AMP = DEVICE.type == 'cuda'
 
 CLASS_NAMES = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
+
+
+class CombinedLoss(nn.Module):
+    def __init__(self, class_weights: torch.Tensor, smooth: float = 1.0,
+                 ce_weight: float = 0.9, dice_weight: float = 0.1):
+        super().__init__()
+        self.ce          = nn.CrossEntropyLoss(weight=class_weights)
+        self.smooth      = smooth
+        self.ce_weight   = ce_weight
+        self.dice_weight = dice_weight
+
+    def dice_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        pred      = torch.softmax(pred, dim=1)
+        target_oh = torch.nn.functional.one_hot(target, num_classes=pred.shape[1]).float()
+        intersection = (pred * target_oh).sum(dim=0)
+        union        = pred.sum(dim=0) + target_oh.sum(dim=0)
+        dice         = (2.0 * intersection + self.smooth) / (union + self.smooth)
+        return 1.0 - dice.mean()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.ce_weight * self.ce(pred, target) + self.dice_weight * self.dice_loss(pred, target)
+
+
+class WarmupCosineScheduler:
+    def __init__(self, optimizer, cfg: TrainConfig):
+        self.optimizer     = optimizer
+        self.warmup_epochs = cfg.warmup_epochs
+        self.total_epochs  = cfg.num_epochs
+        self.base_lr       = cfg.lr
+        self.min_lr        = cfg.min_lr
+        self.current_epoch = 0
+
+    def step(self) -> float:
+        if self.current_epoch < self.warmup_epochs:
+            lr = self.base_lr * (self.current_epoch / max(self.warmup_epochs, 1))
+        else:
+            progress = ((self.current_epoch - self.warmup_epochs) /
+                        max(self.total_epochs - self.warmup_epochs, 1))
+            lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + np.cos(np.pi * progress))
+        for pg in self.optimizer.param_groups:
+            pg['lr'] = lr
+        self.current_epoch += 1
+        return lr
+
 
 class FocalLoss(nn.Module):
     def __init__(self, weight=None, gamma: float = 2.0, label_smoothing: float = 0.0):
@@ -38,44 +79,66 @@ class FocalLoss(nn.Module):
         p_t = torch.exp(-ce)
         return (((1 - p_t) ** self.gamma) * ce).mean()
 
+
 class FloodPatchDataset(Dataset):
-    def __init__(self, X_spatial: np.ndarray, y_labels: np.ndarray, rainfall: np.ndarray):
+    def __init__(self, X_spatial: np.ndarray, y_labels: np.ndarray, 
+                 rainfall: np.ndarray, conditioning: Optional[np.ndarray] = None):
         assert X_spatial.shape[0] == rainfall.shape[0] == y_labels.shape[0]
+        
         self.X    = torch.tensor(X_spatial, dtype=torch.float32)
         self.y    = torch.tensor(y_labels,  dtype=torch.long)
         self.rain = torch.tensor(rainfall,  dtype=torch.float32)
-        print(f"[FloodPatchDataset]  {len(self):,} samples")
+        
+        if conditioning is not None:
+            assert conditioning.shape[0] == y_labels.shape[0], \
+                f"Conditioning shape {conditioning.shape[0]} != labels {y_labels.shape[0]}"
+            self.cond = torch.tensor(conditioning, dtype=torch.float32)
+            has_cond_str = f"✓ with conditioning {tuple(self.cond.shape)}"
+        else:
+            self.cond = None
+            has_cond_str = "⚠ without conditioning"
+        
+        print(f"[FloodPatchDataset]  {len(self):,} samples {has_cond_str}")
         print(f"  Spatial : {tuple(self.X.shape)}")
         print(f"  Rainfall: {tuple(self.rain.shape)}")
+        if self.cond is not None:
+            print(f"  Conditioning: {tuple(self.cond.shape)}")
         print(f"  Labels  : {tuple(self.y.shape)}")
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.rain[idx], self.y[idx]
+        if self.cond is not None:
+            return self.X[idx], self.rain[idx], self.cond[idx], self.y[idx]  # 4-tuple
+        else:
+            return self.X[idx], self.rain[idx], self.y[idx]  # 3-tuple (backward compat)
 
 
 def make_model(cfg: TrainConfig) -> nn.Module:
     return ViTFloodClassifier(
-        spatial_channels   = cfg.spatial_channels,
-        spatial_patch_size = cfg.patch_size,
-        rainfall_timesteps = cfg.rainfall_timesteps,
-        num_classes        = cfg.num_classes,
-        embed_dim          = cfg.embed_dim,
-        num_layers         = cfg.num_layers,
-        num_heads          = cfg.num_heads,
-        mlp_ratio          = cfg.mlp_ratio,
-        dropout            = cfg.dropout,
-        rainfall_method    = cfg.rainfall_method,
-        rainfall_hidden    = cfg.rainfall_hidden,
-        learnable_pos_enc  = cfg.learnable_pos_enc,
+        spatial_channels    = cfg.spatial_channels,
+        spatial_patch_size  = cfg.patch_size,
+        rainfall_timesteps  = cfg.rainfall_timesteps,
+        num_classes         = cfg.num_classes,
+        embed_dim           = cfg.embed_dim,
+        num_layers          = cfg.num_layers,
+        num_heads           = cfg.num_heads,
+        mlp_ratio           = cfg.mlp_ratio,
+        dropout             = cfg.dropout,
+        rainfall_method     = cfg.rainfall_method,
+        rainfall_hidden     = cfg.rainfall_hidden,
+        learnable_pos_enc   = cfg.learnable_pos_enc,
+        use_conditioning    = cfg.use_conditioning,
+        conditioning_dim    = cfg.conditioning_dim,
+        conditioning_hidden = cfg.conditioning_hidden,
     )
 
+
 def compute_class_weights(y: np.ndarray, cfg: TrainConfig) -> torch.Tensor:
-    flat   = y.flatten()
-    flat   = flat[flat >= 0]
-    total  = len(flat)
+    flat    = y.flatten()
+    flat    = flat[flat >= 0]
+    total   = len(flat)
     weights = np.zeros(cfg.num_classes, dtype=np.float32)
     print(f"\nClass weights (power={cfg.weight_power}):")
     for c in range(cfg.num_classes):
@@ -93,8 +156,8 @@ def build_criterion(cfg: TrainConfig, class_weights: torch.Tensor) -> nn.Module:
         print(f"  Loss: FocalLoss(gamma={cfg.focal_gamma}, label_smoothing={cfg.label_smoothing})")
         return FocalLoss(weight=w, gamma=cfg.focal_gamma, label_smoothing=cfg.label_smoothing)
     else:
-        print(f"  Loss: Weighted CrossEntropyLoss (weight_power={cfg.weight_power}, label_smoothing={cfg.label_smoothing})")
-        return nn.CrossEntropyLoss(weight=w, label_smoothing=cfg.label_smoothing)
+        print(f"  Loss: CombinedLoss (ce={cfg.ce_weight}, dice={cfg.dice_weight})")
+        return CombinedLoss(class_weights=w, ce_weight=cfg.ce_weight, dice_weight=cfg.dice_weight)
 
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
@@ -139,7 +202,6 @@ def run_epoch(
     scaler=None,
     is_train: bool = True,
 ) -> Tuple[float, float, Optional[float]]:
-
     model.train() if is_train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
     n_batches = len(loader)
@@ -147,15 +209,24 @@ def run_epoch(
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     with ctx:
-        for i, (spatial, rainfall, labels) in enumerate(loader):
-            spatial  = spatial.to(DEVICE)
-            rainfall = rainfall.to(DEVICE)
-            labels   = labels.to(DEVICE)
+        for i, batch in enumerate(loader):
+            if len(batch) == 4:
+                spatial, rainfall, conditioning, labels = batch
+                spatial      = spatial.to(DEVICE)
+                rainfall     = rainfall.to(DEVICE)
+                conditioning = conditioning.to(DEVICE)
+                labels       = labels.to(DEVICE)
+            else:
+                spatial, rainfall, labels = batch
+                spatial      = spatial.to(DEVICE)
+                rainfall     = rainfall.to(DEVICE)
+                labels       = labels.to(DEVICE)
+                conditioning = None
 
             if is_train and scaler is not None:
                 with torch.amp.autocast('cuda'):
-                    logits, _ = model(spatial, rainfall)
-                    loss = criterion(logits, labels)
+                    logits, _ = model(spatial, rainfall, conditioning)
+                    loss      = criterion(logits, labels)
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -163,8 +234,8 @@ def run_epoch(
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                logits, _ = model(spatial, rainfall)
-                loss = criterion(logits, labels)
+                logits, _ = model(spatial, rainfall, conditioning)
+                loss      = criterion(logits, labels)
                 if is_train:
                     optimizer.zero_grad()
                     loss.backward()
@@ -198,7 +269,6 @@ def train_kfold(
     y_train: np.ndarray,
     cfg: TrainConfig,
 ) -> Tuple[List[Dict], int]:
-
     ckpt_dir = cfg.output_dir / 'checkpoints'
     log_dir  = cfg.output_dir / 'logs'
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +306,7 @@ def train_kfold(
 
         model     = make_model(cfg).to(DEVICE)
         optimizer = optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-        scheduler = CosineAnnealingLR(optimizer, T_max=cfg.num_epochs)
+        scheduler = WarmupCosineScheduler(optimizer, cfg)
         scaler    = torch.amp.GradScaler('cuda') if USE_AMP else None
 
         history           = defaultdict(list)
@@ -245,18 +315,19 @@ def train_kfold(
 
         for epoch in range(cfg.num_epochs):
             t0 = time.time()
-            tr_loss, tr_acc, _      = run_epoch(model, train_loader, criterion, cfg, optimizer, scaler, is_train=True)
-            vl_loss, vl_acc, vl_f1  = run_epoch(model, val_loader,  criterion, cfg, is_train=False)
-            scheduler.step()
+            tr_loss, tr_acc, _     = run_epoch(model, train_loader, criterion, cfg, optimizer, scaler, is_train=True)
+            vl_loss, vl_acc, vl_f1 = run_epoch(model, val_loader,  criterion, cfg, is_train=False)
+            lr = scheduler.step()
 
             history['train_loss'].append(tr_loss)
             history['train_acc'].append(tr_acc)
             history['val_loss'].append(vl_loss)
             history['val_acc'].append(vl_acc)
             history['val_f1'].append(vl_f1)
+            history['lr'].append(lr)
 
             print(f"  Epoch {epoch+1:2d}/{cfg.num_epochs} ({time.time()-t0:.0f}s)  "
-                  f"train loss={tr_loss:.4f}  acc={tr_acc:.4f}  "
+                  f"lr={lr:.2e}  train loss={tr_loss:.4f}  acc={tr_acc:.4f}  "
                   f"val loss={vl_loss:.4f}  acc={vl_acc:.4f}  macro_f1={vl_f1:.4f}")
 
             monitor = vl_f1 if cfg.checkpoint_metric == 'macro_f1' else vl_acc
@@ -297,9 +368,16 @@ def evaluate(model: nn.Module, test_loader: DataLoader, cfg: TrainConfig, split_
     model.eval()
     preds, trues, probs_list = [], [], []
 
-    for spatial, rainfall, labels in test_loader:
-        spatial, rainfall = spatial.to(DEVICE), rainfall.to(DEVICE)
-        logits, _ = model(spatial, rainfall)
+    for batch in test_loader:
+        if len(batch) == 4:
+            spatial, rainfall, conditioning, labels = batch
+            spatial, rainfall, conditioning = spatial.to(DEVICE), rainfall.to(DEVICE), conditioning.to(DEVICE)
+        else:
+            spatial, rainfall, labels = batch
+            spatial, rainfall = spatial.to(DEVICE), rainfall.to(DEVICE)
+            conditioning = None
+
+        logits, _ = model(spatial, rainfall, conditioning)
         probs_list.append(torch.softmax(logits, dim=1).cpu().numpy())
         preds.extend(logits.argmax(1).cpu().numpy())
         trues.extend(labels.numpy())
@@ -329,9 +407,7 @@ def evaluate(model: nn.Module, test_loader: DataLoader, cfg: TrainConfig, split_
     return m
 
 
-
-def _plot_confusion_matrix(cm: np.ndarray, title: str = 'Confusion Matrix',
-                            save_path: Optional[Path] = None):
+def _plot_confusion_matrix(cm: np.ndarray, title: str = 'Confusion Matrix', save_path: Optional[Path] = None):
     cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
     fig, ax = plt.subplots(figsize=(8, 6))
     sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='Blues',

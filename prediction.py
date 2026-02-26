@@ -112,8 +112,14 @@ def generate_prediction_maps(
     # ── Inference ─────────────────────────────────────────────────────────────
     model.eval()
     all_preds, all_probs = [], []
-    for spatial, rainfall, _ in tqdm(test_loader, desc="  Predicting"):
-        logits, _ = model(spatial.to(DEVICE), rainfall.to(DEVICE))
+    for batch in tqdm(test_loader, desc="  Predicting"):
+        if len(batch) == 4:
+            spatial, rainfall, conditioning, _ = batch
+            conditioning = conditioning.to(DEVICE)
+        else:
+            spatial, rainfall, _ = batch
+            conditioning = None
+        logits, _ = model(spatial.to(DEVICE), rainfall.to(DEVICE), conditioning)
         probs = torch.softmax(logits, dim=1)
         all_preds.extend(logits.argmax(1).cpu().numpy())
         all_probs.extend(probs.cpu().numpy())
@@ -177,7 +183,6 @@ def generate_prediction_maps(
         for ax2 in axes2:
             ax2.set_facecolor('#2a2a2a')
 
-        # Mask no-data pixels (outside valid flood region)
         valid_mask  = conf > 0
         conf_masked = np.ma.masked_where(~valid_mask, conf)
         cmap_conf   = plt.cm.RdYlGn.copy()
@@ -193,7 +198,6 @@ def generate_prediction_maps(
         cbar1.ax.tick_params(colors='white')
         plt.setp(cbar1.ax.yaxis.get_ticklabels(), color='white')
 
-        # Low confidence — only within valid region
         low_mask    = valid_mask & (conf < 0.5)
         low_display = np.ma.masked_where(~valid_mask, low_mask.astype(float))
         cmap_low    = plt.cm.Reds.copy()
@@ -258,7 +262,6 @@ def generate_prediction_maps(
 
     print(f"\n✓ Done — results in: {output_dir}")
     return {'predictions': prediction_maps}
-
 
 def build_eval_results(
     gt_maps:       Dict[int, np.ndarray],

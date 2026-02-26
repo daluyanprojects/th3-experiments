@@ -12,9 +12,14 @@ def split_spatial_data(
     random_seed: int,
     patch_size: int
 ) -> Dict:
+    """
+    Split data with conditioning vectors passed through.
+    
+    NEW: Conditioning vectors are replicated for each patch
+    """
     
     print("\n" + "="*70)
-    print("SPATIAL DATA SPLITTING")
+    print("SPATIAL DATA SPLITTING (WITH CONDITIONING)")
     print("="*70)
     
     np.random.seed(random_seed)
@@ -31,6 +36,7 @@ def split_spatial_data(
     print("    • All 50 scenarios used for BOTH regions")
     print("    • Training scenarios → GMM patches")
     print("    • Testing scenarios → Manila patches")
+    print("    • Conditioning vectors replicated per patch (NEW)")
     
     # -------------------------------------------------------------------------
     # 5.2 IDENTIFY SPATIAL MASKS
@@ -91,10 +97,17 @@ def split_spatial_data(
     print(f"    {test_scenario_ids}")
     
     # -------------------------------------------------------------------------
-    # 5.4 EXTRACT DATA FOR EACH SPLIT
+    # 5.4 EXTRACT DATA FOR EACH SPLIT (WITH CONDITIONING)
     # -------------------------------------------------------------------------
-    print(f"\n[5.4] Extracting Split Data")
+    print(f"\n[5.4] Extracting Split Data (with conditioning vectors)")
     print("-" * 70)
+    
+    # Check if conditioning vectors exist
+    has_conditioning = rainfall_results.get('conditioning_vectors') is not None
+    if has_conditioning:
+        print(f"  ✓ Conditioning vectors found: {rainfall_results['conditioning_vectors'].shape}")
+    else:
+        print(f"  ⚠ No conditioning vectors - model will not have explicit scenario metadata")
     
     # Extract training data (GMM patches from train scenarios)
     print("\n  Extracting Training Data (GMM region)...")
@@ -102,6 +115,7 @@ def split_spatial_data(
         scenario_ids=train_scenario_ids,
         spatial_inputs=preprocessed_spatial['train'],
         rainfall_sequences=rainfall_results['sequences'],
+        conditioning_vectors=rainfall_results.get('conditioning_vectors'),  # NEW
         categorized_maps=categorization_results['train']['categorized_maps'],
         patch_coords=categorization_results['train']['patch_coords'],
         split_name='train',
@@ -114,6 +128,7 @@ def split_spatial_data(
         scenario_ids=test_scenario_ids,
         spatial_inputs=preprocessed_spatial['test'],
         rainfall_sequences=rainfall_results['sequences'],
+        conditioning_vectors=rainfall_results.get('conditioning_vectors'),  # NEW
         categorized_maps=categorization_results['test']['categorized_maps'],
         patch_coords=categorization_results['test']['patch_coords'],
         split_name='test',
@@ -128,7 +143,6 @@ def split_spatial_data(
     
     verification = _verify_split(train_data, test_data, train_scenario_ids, test_scenario_ids)
     
-
     results = {
         'train': train_data,
         'test': test_data,
@@ -148,30 +162,46 @@ def split_spatial_data(
             'manila_pixels': int(manila_pixels),
             'train_patches': int(train_patches),
             'test_patches': int(test_patches),
-            'split_strategy': 'Spatially complementary with random scenario assignment'
+            'split_strategy': 'Spatially complementary with random scenario assignment',
+            'has_conditioning': has_conditioning  # NEW
         },
         'masks': {
             'gmm_mask': gmm_mask,
             'manila_mask': manila_mask,
             'manila_box_mask': manila_box_mask
         },
-        'verification': verification
+        'verification': verification,
+        'encoding_info': rainfall_results.get('encoding_info')  # NEW
     }
     
     print(f"\n{'='*70}")
     print(f"SPATIAL SPLITTING COMPLETE")
     print(f"  Train: {num_train_scenarios} scenarios × {train_patches:,} patches = {train_data['total_samples']:,} samples")
     print(f"  Test: {num_test_scenarios} scenarios × {test_patches:,} patches = {test_data['total_samples']:,} samples")
+    # FIXED
+    if has_conditioning:
+        print(f"  Conditioning: ✓ Included ({rainfall_results['conditioning_vectors'].shape[1]} dims)")
     print(f"  All verifications: {'✓ PASSED' if verification['all_passed'] else '✗ FAILED'}")
     print(f"{'='*70}\n")
     
     return results
 
 
-
-def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall_sequences: np.ndarray,
-    categorized_maps: List[Dict], patch_coords: List[Tuple], split_name: str, patch_size : int
+def _extract_split_data(
+    scenario_ids: List[int],
+    spatial_inputs: Dict,
+    rainfall_sequences: np.ndarray,
+    conditioning_vectors: np.ndarray,  # NEW: Can be None
+    categorized_maps: List[Dict],
+    patch_coords: List[Tuple],
+    split_name: str,
+    patch_size: int
 ) -> Dict:
+    """
+    Extract split data WITH conditioning vectors.
+    
+    NEW: Conditioning vector is replicated for each patch from the same scenario
+    """
     
     dem = spatial_inputs['dem']
     infiltration = spatial_inputs['infiltration']
@@ -182,10 +212,13 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
     print(f"    Spatial inputs shape: {dem.shape}")
     print(f"    Number of patches: {num_patches:,}")
     print(f"    Number of scenarios: {len(scenario_ids)}")
+    if conditioning_vectors is not None:
+        print(f"    Conditioning shape: {conditioning_vectors.shape}")
     
     # Initialize storage
     all_spatial_patches = []
     all_rainfall_sequences = []
+    all_conditioning_vectors = []  # NEW
     all_labels = []
     all_scenario_metadata = []
     
@@ -194,6 +227,12 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
         
         # Get rainfall sequence for this scenario
         rainfall_seq = rainfall_sequences[scenario_idx]  # Shape: (13,)
+        
+        # Get conditioning vector for this scenario (NEW)
+        if conditioning_vectors is not None:
+            cond_vec = conditioning_vectors[scenario_idx]  # Shape: (4,)
+        else:
+            cond_vec = None
         
         # Get categorized labels for this scenario
         cat_data = categorized_maps[scenario_idx]
@@ -216,6 +255,8 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
             
             all_spatial_patches.append(spatial_patch)
             all_rainfall_sequences.append(rainfall_seq)
+            if cond_vec is not None:
+                all_conditioning_vectors.append(cond_vec)  # NEW: Same vector for all patches in scenario
             all_labels.append(labels[patch_idx])
             all_scenario_metadata.append({
                 'scenario_id': scenario_id,
@@ -224,8 +265,9 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
             })
     
     # Convert to arrays
-    spatial_patches = np.array(all_spatial_patches)  # Shape: (N, 3, 16, 16)
+    spatial_patches = np.array(all_spatial_patches)  # Shape: (N, 3, patch_size, patch_size)
     rainfall_seqs = np.array(all_rainfall_sequences)  # Shape: (N, 13)
+    conditioning_vecs = np.array(all_conditioning_vectors) if all_conditioning_vectors else None  # NEW: (N, 4) or None
     labels = np.array(all_labels, dtype=np.int64)     # Shape: (N,)
     
     total_samples = len(labels)
@@ -233,6 +275,8 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
     print(f"    Total samples: {total_samples:,}")
     print(f"    Spatial patches: {spatial_patches.shape}")
     print(f"    Rainfall sequences: {rainfall_seqs.shape}")
+    if conditioning_vecs is not None:
+        print(f"    Conditioning vectors: {conditioning_vecs.shape}")
     print(f"    Labels: {labels.shape}")
     
     # Class distribution
@@ -244,6 +288,7 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
     return {
         'spatial_patches': spatial_patches,
         'rainfall_sequences': rainfall_seqs,
+        'conditioning_vectors': conditioning_vecs,  # NEW
         'labels': labels,
         'scenario_metadata': all_scenario_metadata,
         'total_samples': total_samples,
@@ -252,7 +297,11 @@ def _extract_split_data( scenario_ids: List[int], spatial_inputs: Dict, rainfall
     }
 
 
-def _verify_split(train_data: Dict, test_data: Dict, train_scenario_ids: List[int], test_scenario_ids: List[int]) -> Dict:
+def _verify_split(train_data: Dict, test_data: Dict, 
+                 train_scenario_ids: List[int], test_scenario_ids: List[int]) -> Dict:
+    """
+    Verify split with conditioning check.
+    """
     
     checks = {}
     
@@ -281,6 +330,13 @@ def _verify_split(train_data: Dict, test_data: Dict, train_scenario_ids: List[in
         test_data['rainfall_sequences'].ndim == 2 and
         test_data['labels'].ndim == 1
     )
+    
+    # NEW: Check conditioning shapes if present
+    if train_data['conditioning_vectors'] is not None:
+        train_shapes_ok = train_shapes_ok and (train_data['conditioning_vectors'].ndim == 2)
+    if test_data['conditioning_vectors'] is not None:
+        test_shapes_ok = test_shapes_ok and (test_data['conditioning_vectors'].ndim == 2)
+    
     shapes_ok = train_shapes_ok and test_shapes_ok
     print(f"  Data shapes valid: {'✓' if shapes_ok else '✗'}")
     checks['shapes_valid'] = shapes_ok
@@ -291,11 +347,17 @@ def _verify_split(train_data: Dict, test_data: Dict, train_scenario_ids: List[in
         len(train_data['rainfall_sequences']) == 
         len(train_data['labels'])
     )
+    if train_data['conditioning_vectors'] is not None:
+        train_match = train_match and (len(train_data['conditioning_vectors']) == len(train_data['labels']))
+    
     test_match = (
         len(test_data['spatial_patches']) == 
         len(test_data['rainfall_sequences']) == 
         len(test_data['labels'])
     )
+    if test_data['conditioning_vectors'] is not None:
+        test_match = test_match and (len(test_data['conditioning_vectors']) == len(test_data['labels']))
+    
     counts_match = train_match and test_match
     print(f"  Sample counts match: {'✓' if counts_match else '✗'}")
     checks['sample_counts_match'] = counts_match
@@ -305,10 +367,16 @@ def _verify_split(train_data: Dict, test_data: Dict, train_scenario_ids: List[in
         not np.isnan(train_data['spatial_patches']).any() and
         not np.isnan(train_data['rainfall_sequences']).any()
     )
+    if train_data['conditioning_vectors'] is not None:
+        train_no_nan = train_no_nan and (not np.isnan(train_data['conditioning_vectors']).any())
+    
     test_no_nan = (
         not np.isnan(test_data['spatial_patches']).any() and
         not np.isnan(test_data['rainfall_sequences']).any()
     )
+    if test_data['conditioning_vectors'] is not None:
+        test_no_nan = test_no_nan and (not np.isnan(test_data['conditioning_vectors']).any())
+    
     no_nans = train_no_nan and test_no_nan
     print(f"  No NaN values: {'✓' if no_nans else '✗'}")
     checks['no_nans'] = no_nans

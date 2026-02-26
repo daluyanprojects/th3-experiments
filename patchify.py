@@ -42,11 +42,13 @@ def extract_vit_patches(split_results: Dict, patch_size: int) -> Dict:
     # Training data
     X_train_spatial = train_data['spatial_patches']      # (N_train, 3, 16, 16)
     X_train_rainfall = train_data['rainfall_sequences']   # (N_train, 13)
+    X_train_conditioning = train_data.get('conditioning_vectors')
     y_train = train_data['labels']                        # (N_train,)
     
     # Test data
     X_test_spatial = test_data['spatial_patches']         # (N_test, 3, 16, 16)
     X_test_rainfall = test_data['rainfall_sequences']     # (N_test, 13)
+    X_test_conditioning = test_data.get('conditioning_vectors') 
     y_test = test_data['labels']                          # (N_test,)
     
     print(f"  Training Set:")
@@ -125,6 +127,7 @@ def extract_vit_patches(split_results: Dict, patch_size: int) -> Dict:
         'train': {
             'spatial_patches': X_train_spatial,
             'rainfall_sequences': X_train_rainfall,
+            'conditioning_vectors': X_train_conditioning,
             'labels': y_train,
             'metadata': train_data['scenario_metadata'],
             'num_samples': len(y_train),
@@ -133,6 +136,7 @@ def extract_vit_patches(split_results: Dict, patch_size: int) -> Dict:
         'test': {
             'spatial_patches': X_test_spatial,
             'rainfall_sequences': X_test_rainfall,
+            'conditioning_vectors': X_test_conditioning,
             'labels': y_test,
             'metadata': test_data['scenario_metadata'],
             'num_samples': len(y_test),
@@ -146,6 +150,7 @@ def extract_vit_patches(split_results: Dict, patch_size: int) -> Dict:
             'spatial_channels': 3,
             'rainfall_timesteps': 13
         },
+        'encoding_info': split_results.get('encoding_info'),
         'quality_checks': checks
     }
     
@@ -163,12 +168,14 @@ def get_data_loader_ready(results: Dict) -> Tuple[Tuple, Tuple]:
     train_data = (
         results['train']['spatial_patches'],
         results['train']['rainfall_sequences'],
+        results['train'].get('conditioning_vectors'),  
         results['train']['labels']
     )
     
     test_data = (
         results['test']['spatial_patches'],
         results['test']['rainfall_sequences'],
+        results['test'].get('conditioning_vectors'),
         results['test']['labels']
     )
     
