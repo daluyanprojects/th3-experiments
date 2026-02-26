@@ -24,7 +24,6 @@ FLOOD_CLASSES = {
 PATCH_SIZE  = 4
 MAP_SHAPE   = (1152, 1152)
 
-
 # ── Engine dataclass ───────────────────────────────────────────────────────────
 @dataclass
 class InferenceEngine:
@@ -197,7 +196,6 @@ def _storm_label(storm_type: str, depth_mm: float, tpeak: Optional[float]) -> st
     return label
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
 def predict_with_confidence(
     engine    : InferenceEngine,
     storm_type: str,

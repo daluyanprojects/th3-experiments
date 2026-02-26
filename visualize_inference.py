@@ -16,14 +16,12 @@ CLASS_LABELS = {
      2: 'Moderate', 3: 'Heavy',   4: 'Extreme'
 }
 
-# Colormap for classes 0–4 only; -1 (outside) rendered as transparent via masking
 FLOOD_CMAP  = mcolors.ListedColormap([CLASS_COLORS[k] for k in range(5)])
 FLOOD_NORM  = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], FLOOD_CMAP.N)
 FLOOD_TICKS = [0, 1, 2, 3, 4]
 
 
 def _to_masked(flood_map):
-    """Return a float array with outside pixels (=-1) masked as NaN."""
     arr = flood_map.astype(np.float32)
     arr[arr == -1] = np.nan
     return arr
@@ -41,7 +39,6 @@ def _storm_title(result):
 
 
 def _flood_imshow(ax, flood_map, **kwargs):
-    """imshow that renders outside pixels as fully transparent."""
     masked = _to_masked(flood_map)
     cmap = FLOOD_CMAP
     cmap.set_bad(color='none')   # NaN → transparent

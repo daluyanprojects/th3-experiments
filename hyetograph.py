@@ -1,4 +1,3 @@
-# hyetograph.py
 """
 Fixed parameters (same for all 50 training scenarios):
     D_hr_effective : 1.0 hour
@@ -31,8 +30,8 @@ from typing import Optional, Dict, Tuple
 D_HR    = 1.0
 DT_MIN  = 5.0
 DT_HR   = DT_MIN / 60
-N_REAL  = 12           # real intensity blocks
-N_STEPS = 13           # N_REAL + 1 trailing zero  (matches training CSV format)
+N_REAL  = 12          
+N_STEPS = 13         
 
 # Beta distribution parameters per SCS storm type
 SCS_BETA_PARAMS: Dict[str, Tuple[float, float]] = {
@@ -41,7 +40,6 @@ SCS_BETA_PARAMS: Dict[str, Tuple[float, float]] = {
     'back-loaded':  (5.0, 2.0),
 }
 
-# Storm type → integer index used as pattern_type conditioning dim
 STORM_TYPE_INDEX: Dict[str, int] = {
     'front-loaded': 0,
     'balanced':     1,
@@ -49,14 +47,12 @@ STORM_TYPE_INDEX: Dict[str, int] = {
     'triangular':   3,
 }
 
-DEPTH_MIN: float = 5.0    # minimum storm depth across all 50 scenarios
-DEPTH_MAX: float = 78.0   # maximum storm depth  (encoding_info['max_depth_mm'])
+DEPTH_MIN: float = 5.0  
+DEPTH_MAX: float = 78.0  
 
-# Rainfall intensity normalisation anchors — global_max method used in training
 RAIN_MIN: float = 0.0
-RAIN_MAX: float = 189.85  # global peak intensity across all 50 scenarios (mm/hr)
+RAIN_MAX: float = 189.85  
 
-# Training distribution ranges — used only for out-of-distribution warnings
 TRAINING_RANGES: Dict[str, Dict] = {
     'front-loaded': {'depth_mm': (6,  78),  'tpeak': None},
     'balanced':     {'depth_mm': (19, 78),  'tpeak': None},
@@ -71,7 +67,6 @@ def validate_user_inputs(
     depth_mm: float,
     tpeak: Optional[float] = None,
 ) -> list:
-    """Return a list of human-readable OOD warning strings (empty = all clear)."""
     warnings = []
 
     if storm_type not in STORM_TYPE_INDEX:
@@ -112,11 +107,6 @@ def validate_user_inputs(
 
 # ── Hyetograph Generators ──────────────────────────────────────────────────────
 def _generate_scs_hyetograph(depth_mm: float, alpha: float, beta: float) -> np.ndarray:
-    """
-    Generate 12-step SCS hyetograph via Beta PDF evaluated at block midpoints.
-    Scales so total depth sums exactly to depth_mm.
-    Returns intensities in mm/hr, shape (12,).
-    """
     t_mids    = np.array([(i + 0.5) / N_REAL for i in range(N_REAL)])
     pdf_vals  = beta_dist.pdf(t_mids, alpha, beta)
     weights   = pdf_vals / pdf_vals.sum()
@@ -126,10 +116,6 @@ def _generate_scs_hyetograph(depth_mm: float, alpha: float, beta: float) -> np.n
 
 
 def _generate_triangular_hyetograph(depth_mm: float, tpeak: float) -> np.ndarray:
-    """
-    Generate 12-step triangular hyetograph with peak at fraction tpeak of duration.
-    Returns intensities in mm/hr, shape (12,).
-    """
     n_rising  = math.floor(tpeak * N_REAL) + 1
     n_falling = N_REAL - n_rising
 
@@ -159,11 +145,7 @@ def generate_hyetograph(
     depth_mm: float,
     tpeak: Optional[float] = None,
 ) -> np.ndarray:
-    """
-    Generate the full 13-step raw hyetograph (mm/hr) matching training CSV format.
-    Step 13 is always 0.0 (trailing zero appended during training).
-    Returns shape (13,) float32.
-    """
+
     if storm_type in SCS_BETA_PARAMS:
         alpha, beta = SCS_BETA_PARAMS[storm_type]
         intensities = _generate_scs_hyetograph(depth_mm, alpha, beta)
@@ -183,10 +165,6 @@ def normalize_hyetograph(
     rain_min: float = RAIN_MIN,
     rain_max: float = RAIN_MAX,
 ) -> np.ndarray:
-    """
-    Normalise a raw (13,) hyetograph to [0, 1] using global_max method.
-    Defaults to the training anchors stored in this module.
-    """
     return ((raw_sequence - rain_min) / (rain_max - rain_min + 1e-8)).astype(np.float32)
 
 
@@ -203,23 +181,7 @@ def build_conditioning_vector(
     depth_mm: float,
     tpeak: Optional[float] = None,
 ) -> Tuple[np.ndarray, list]:
-    """
-    Build the 4-D conditioning vector that matches training format exactly.
 
-    Training encoding_info:
-        conditioning_dims : 4
-        dim_names         : ['pattern_type', 'depth_normalized', 'tpeak', 'has_tpeak']
-
-    Returns
-    -------
-    conditioning : np.ndarray, shape (4,), float32
-        [0] pattern_type    – float index of storm type (0–3)
-        [1] depth_normalized – (depth_mm − DEPTH_MIN) / (DEPTH_MAX − DEPTH_MIN)
-        [2] tpeak           – fractional peak time; 0.0 for non-triangular storms
-        [3] has_tpeak       – 1.0 if triangular, 0.0 otherwise
-    warnings : list[str]
-        Out-of-distribution warnings (empty if all inputs are within training range).
-    """
     # 1. Validate inputs and collect OOD warnings
     warn_list = validate_user_inputs(storm_type, depth_mm, tpeak)
 
@@ -251,15 +213,7 @@ def build_inference_inputs(
     depth_mm: float,
     tpeak: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, list]:
-    """
-    Single entry point for inference. Returns everything the model needs.
 
-    Returns
-    -------
-    rainfall_norm  : np.ndarray (13,)  – normalised hyetograph sequence
-    conditioning   : np.ndarray (4,)   – conditioning vector
-    warnings       : list[str]         – OOD warnings
-    """
     conditioning, warn_list = build_conditioning_vector(storm_type, depth_mm, tpeak)
     raw_sequence  = generate_hyetograph(storm_type, depth_mm, tpeak)
     rainfall_norm = normalize_hyetograph(raw_sequence)
@@ -274,7 +228,7 @@ def verify_against_csv(
     tpeak: Optional[float] = None,
     tolerance: float = 0.5,
 ) -> None:
-    """Compare a generated hyetograph against a reference CSV sequence."""
+
     generated = generate_hyetograph(storm_type, depth_mm, tpeak)
 
     print(f"\nVerification — {storm_type}, {depth_mm}mm"
