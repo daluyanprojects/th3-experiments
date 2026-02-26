@@ -4,7 +4,7 @@
   "patch_size": 4,
   "num_classes": 5,
   "input_channels": 11,
-  "conditioning_dim": 19,
+  "conditioning_dim": 21,
   "drain_channels": [
     3,
     4,
@@ -17,6 +17,8 @@
     9,
     10
   ],
+  "depth_min": 6.0,
+  "depth_max": 78.0,
   "n_steps": 13,
   "n_real": 12,
   "dt_min": 5.0,

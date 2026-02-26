@@ -12,7 +12,7 @@ class DatasetConfig:
     rainfall_timesteps:   int  = 13
     num_storm_types:      int  = 4
     num_channel_flags:    int  = 2
-    conditioning_dim:     int  = 19
+    conditioning_dim:     int  = 21
     input_channels:       int  = None
     training_samples:     int  = None
     test_samples:         int  = None
@@ -38,8 +38,9 @@ class DatasetConfig:
         self.num_test_scenarios   = test_dataset['num_scenarios']
         self.patches_per_scenario = train_dataset['patches_per_scenario']
 
-        rain_and_type_dim         = train_dataset['rain_and_type'].shape[-1]
-        self.conditioning_dim     = rain_and_type_dim + self.num_channel_flags
+        rain_and_type_dim     = train_dataset['rain_and_type'].shape[-1]
+        self.conditioning_dim = rain_and_type_dim + self.num_channel_flags + 2 
+        
         self.rainfall_timesteps   = self.conditioning_dim - self.num_storm_types - self.num_channel_flags
 
         self.drain_channels       = drain_channels   
@@ -86,8 +87,8 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     batch_size:          int   = 1024
-    num_epochs:          int   = 10
-    num_folds:           int   = 2
+    num_epochs:          int   = 30
+    num_folds:           int   = 3
     lr:                  float = 1e-4
     weight_decay:        float = 0.05
     betas:               tuple = (0.9, 0.999)

@@ -56,6 +56,8 @@ class FloodInferenceEngine:
         self.conditioning_dim = cfg['conditioning_dim']
         self.drain_channels   = cfg['drain_channels']
         self.soil_channels    = cfg['soil_channels']
+        self.depth_min        = cfg['depth_min']    
+        self.depth_max        = cfg['depth_max']   
 
         # ── Derive best model path from best_fold ─────────────────────────────
         best_fold  = cfg['best_fold']
@@ -134,6 +136,8 @@ class FloodInferenceEngine:
             depth_mm    = depth_mm,
             rain_min    = self.rain_min,
             rain_max    = self.rain_max,
+            depth_min   = self.depth_min,    
+            depth_max   = self.depth_max, 
             hasDrainage = hasDrainage,
             hasSoil     = hasSoil,
             tpeak       = tpeak,

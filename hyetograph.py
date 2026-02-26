@@ -172,30 +172,40 @@ def build_conditioning_vector(
     depth_mm    : float,
     rain_min    : float,
     rain_max    : float,
+    depth_min   : float,
+    depth_max   : float,
     hasDrainage : bool,
     hasSoil     : bool,
     tpeak       : Optional[float] = None,
 ) -> Tuple[np.ndarray, list]:
-    
+
     # 1. Validate
     warnings = validate_user_inputs(storm_type, depth_mm, tpeak)
 
     # 2. Generate raw (13,) hyetograph
     raw_sequence = generate_hyetograph(storm_type, depth_mm, tpeak)
 
-    # 3. Normalize
+    # 3. Normalize → (13,)
     norm_sequence = normalize_hyetograph(raw_sequence, rain_min, rain_max)
 
-    # 4. Storm type one-hot (4,)
+    # 4. Storm type one-hot → (4,)
     onehot = get_storm_type_onehot(storm_type)
 
-    # 5. Availability flags (2,)
+    # 5. Availability flags → (2,)
     flags = np.array([float(hasDrainage), float(hasSoil)], dtype=np.float32)
 
-    # 6. Concatenate → (19,)
-    conditioning = np.concatenate([norm_sequence, onehot, flags])
+    # 6. tpeak and depth_norm → (2,)
+    tpeak_val  = float(tpeak) if (storm_type == 'triangular' and tpeak is not None) else 0.0
+    depth_norm = float(np.clip(
+        (depth_mm - depth_min) / (depth_max - depth_min + 1e-8),
+        -0.1, 1.1
+    ))
+    extra = np.array([tpeak_val, depth_norm], dtype=np.float32)
 
-    assert conditioning.shape == (19,), f"Expected (19,), got {conditioning.shape}"
+    # 7. Concatenate all → (21,)
+    conditioning = np.concatenate([norm_sequence, onehot, flags, extra])
+
+    assert conditioning.shape == (21,), f"Expected (21,), got {conditioning.shape}"
 
     return conditioning, warnings
 
