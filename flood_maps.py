@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import matplotlib.patches as mpatches
-    
+
 FLOOD_CLASSES = {
     0: {
         'name': 'No Flood',
@@ -14,22 +14,22 @@ FLOOD_CLASSES = {
     1: {
         'name': 'Light',
         'range': (0.15, 0.24),
-        'color': '#FFEB3B'  # Yellow
+        'color': '#C6DBEF'  # Light blue
     },
     2: {
         'name': 'Moderate',
         'range': (0.24, 0.46),
-        'color': '#FF9800'  # Orange
+        'color': '#6BAED6'  # Medium blue
     },
     3: {
         'name': 'Heavy',
         'range': (0.46, 0.68),
-        'color': '#F44336'  # Red
+        'color': '#2171B5'  # Deep blue
     },
     4: {
         'name': 'Extreme',
         'range': (0.68, float('inf')),
-        'color': '#9C27B0'  # Purple
+        'color': '#08306B'  # Dark navy
     }
 }
 
