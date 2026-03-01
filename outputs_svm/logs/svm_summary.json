@@ -1,0 +1,27 @@
+{
+  "model": "SVM",
+  "kernel": "rbf",
+  "C": 10.0,
+  "gamma": "scale",
+  "class_weight": "balanced",
+  "max_train_samples": 5000,
+  "n_features": 35,
+  "test": {
+    "accuracy": 0.5650919067215363,
+    "macro_f1": 0.2985263407854032,
+    "weighted_f1": 0.6285245762839448,
+    "critical_recall": 0.3723150357995227
+  },
+  "cv": {
+    "mean_val_f1": 0.3337652125481115,
+    "best_fold": 1,
+    "best_fold_val_f1": 0.34728016791822586
+  },
+  "scenario_aggregate": {
+    "mean_f1": 0.2381327526979707,
+    "mean_iou": 0.18205240919199978,
+    "mean_acc": 0.5650919067215363,
+    "best_idx": 41,
+    "worst_idx": 23
+  }
+}
