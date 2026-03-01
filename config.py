@@ -3,6 +3,18 @@ from pathlib import Path
 from typing import Dict, Optional
 import json
 
+# ── Model architecture ────────────────────────────────────────────────────────
+@dataclass
+class ModelConfig:
+    embed_dim:         int   = 256
+    num_layers:        int   = 4
+    num_heads:         int   = 8
+    mlp_ratio:         float = 2.0
+    dropout:           float = 0.1
+    rainfall_method:   str   = 'conv'
+    learnable_pos_enc: bool  = True
+    rainfall_hidden:   int   = 128
+
 
 # ── Dataset info ──────────────────────────────────────────────────────────────
 @dataclass
@@ -70,25 +82,12 @@ class DatasetConfig:
         print(f"  drain_channels={self.drain_channels}")
         print(f"  soil_channels={self.soil_channels}")
 
-# ── Model architecture ────────────────────────────────────────────────────────
-@dataclass
-class ModelConfig:
-    embed_dim:         int   = 256
-    num_layers:        int   = 4
-    num_heads:         int   = 8
-    mlp_ratio:         float = 2.0
-    dropout:           float = 0.1
-    rainfall_method:   str   = 'conv'
-    learnable_pos_enc: bool  = True
-    rainfall_hidden:   int   = 128
-
-
 # ── Training ──────────────────────────────────────────────────────────────────
 @dataclass
 class TrainConfig:
     batch_size:          int   = 1024
-    num_epochs:          int   = 30
-    num_folds:           int   = 3
+    num_epochs:          int   = 20
+    num_folds:           int   = 2
     lr:                  float = 1e-4
     weight_decay:        float = 0.05
     betas:               tuple = (0.9, 0.999)
