@@ -19,6 +19,7 @@ from shapely.geometry import box
 import matplotlib.pyplot as plt
 from pathlib import Path
 import warnings
+from typing import Optional, Dict, List, Tuple
 
 from hyetograph import build_inference_inputs
 from config import TrainConfig
@@ -362,9 +363,8 @@ def visualize_prediction_tiff(tiff_path: str, title: str = None, figsize=(15, 4)
     # Zoom to valid flood pixels
     valid_rows, valid_cols = np.where(~nodata_mask)
     if len(valid_rows):
-        pad = 20
-        r0, r1 = max(valid_rows.min()-pad, 0), min(valid_rows.max()+pad, flood_map.shape[0]-1)
-        c0, c1 = max(valid_cols.min()-pad, 0), min(valid_cols.max()+pad, flood_map.shape[1]-1)
+        r0, r1 = max(valid_rows.min(), 0), min(valid_rows.max(), flood_map.shape[0]-1)
+        c0, c1 = max(valid_cols.min(), 0), min(valid_cols.max(), flood_map.shape[1]-1)
         xlim = (transform.c + c0*transform.a, transform.c + c1*transform.a)
         ylim = (transform.f + r1*transform.e, transform.f + r0*transform.e)
     else:
@@ -401,7 +401,7 @@ def visualize_prediction_tiff(tiff_path: str, title: str = None, figsize=(15, 4)
     axes[1].set_title('Confidence', fontsize=9, fontweight='bold')
     axes[1].tick_params(labelsize=6)
 
-    cb2 = plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+    cb2 = plt.colorbar(im2, ax=axes[1], fraction=0.046)
     cb2.ax.tick_params(labelsize=6)
     cb2.ax.axhline(y=0.5, color='black', linewidth=1, linestyle='--')
 
@@ -415,7 +415,7 @@ def visualize_prediction_tiff(tiff_path: str, title: str = None, figsize=(15, 4)
                  f"μ={valid_conf.mean():.2f}  σ={valid_conf.std():.2f}\n"
                  f"Uncertain: {(valid_conf<0.5).mean()*100:.1f}%",
                  transform=axes[1].transAxes, fontsize=6, va='bottom',
-                 bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='lightgray', alpha=0.85))
+                 bbox=dict(boxstyle='round', fc='white', ec='lightgray', alpha=0.85))
 
     # ── Band 3: Barangay ─────────────────────────────────────────────────────
     if bar_map is not None:
@@ -441,10 +441,63 @@ def visualize_prediction_tiff(tiff_path: str, title: str = None, figsize=(15, 4)
         axes[2].tick_params(labelsize=6)
         axes[2].text(0.02, 0.02, f"{len(unique_codes)} barangay(s)",
                      transform=axes[2].transAxes, fontsize=6, va='bottom',
-                     bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='lightgray', alpha=0.85))
+                     bbox=dict(boxstyle='round', fc='white', ec='lightgray', alpha=0.85))
     else:
         axes[2].axis('off')
         axes[2].set_title('Barangay (N/A)', fontsize=9)
 
     plt.tight_layout()
     return fig
+
+def run_inference(
+    engine: InferenceEngine,
+    storm_type: str,
+    depth_mm: float,
+    output_dir: str | Path,
+    dem_transform: rasterio.Affine,
+    dem_crs: rasterio.crs.CRS,
+    tpeak: Optional[float] = None,
+    barangay_band: Optional[np.ndarray] = None,
+    stem: Optional[str] = None,
+    visualize: bool = True,
+    figsize: tuple = (15, 4),
+) -> Dict:
+    
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Generate filename stem if not provided
+    if stem is None:
+        tp_tag = f"_tp{str(tpeak).replace('.', '')}" if tpeak is not None else ""
+        stem = f"{storm_type.replace('-', '_')}_{int(depth_mm)}mm{tp_tag}"
+
+    tif_path = str(output_dir / f"{stem}.tif")
+
+    # 2. Predict
+    result = predict_with_confidence(
+        engine=engine,
+        storm_type=storm_type,
+        depth_mm=depth_mm,
+        tpeak=tpeak,
+        verbose=True
+    )
+
+    # 3. Save GeoTIFF
+    # Note: Using your existing save_prediction_tiff logic
+    save_prediction_tiff(
+        result=result,
+        engine=engine,
+        dem_crs=dem_crs,
+        dem_transform=dem_transform,
+        _barangay_band=barangay_band if barangay_band is not None else np.zeros((1152, 1152), dtype='int32'),
+        save_path=tif_path
+    )
+
+    # 4. Optional Visualization
+    if visualize:
+        title = f"{storm_type.title()} | {depth_mm}mm" + (f" | tpeak={tpeak}" if tpeak else "")
+        visualize_prediction_tiff(tif_path, title=title, figsize=figsize)
+        plt.show()
+
+    result["tif_path"] = tif_path
+    return result
