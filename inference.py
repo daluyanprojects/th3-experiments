@@ -1,14 +1,19 @@
-"""
-Web inference entry point for EXP-DES-2.
-Loads a trained ViTFloodClassifier and runs flood prediction from user-defined storm parameters and spatial toggles.
-"""
 import json
 import numpy as np
 import torch
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
-
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
 from rasterio.transform import Affine
+import geopandas as gpd
+import rasterio
+from shapely.geometry import box
+from rasterio.features import rasterize
+from rasterio.transform import Affine
+
 
 from hyetograph import build_conditioning_vector
 from vit import ViTFloodClassifier
@@ -16,14 +21,19 @@ from model_config import make_model
 from config import DatasetConfig, ModelConfig
 
 
-FLOOD_CLASS_NAMES = {
-    0: 'No Flood',
-    1: 'Light',
-    2: 'Moderate',
-    3: 'Heavy',
-    4: 'Extreme',
+# ── Visualization Helpers ─────────────────────────────────────────────────────
+FLOOD_COLORS = {
+    0: '#FFFFFF', 
+    1: '#C6DBEF',  
+    2: '#6BAED6',  
+    3: '#2171B5',
+    4: '#08306B', 
 }
 
+FLOOD_LABELS = {0: 'No Flood', 1: 'Light', 2: 'Moderate', 3: 'Heavy', 4: 'Extreme'}
+flood_cmap = mcolors.ListedColormap([FLOOD_COLORS[i] for i in range(5)])
+flood_norm = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], ncolors=5)
+legend_patches = [ mpatches.Patch(facecolor=FLOOD_COLORS[i], edgecolor='gray', linewidth=0.5, label=f'Class {i} — {FLOOD_LABELS[i]}') for i in range(5)]
 
 def save_spatial_data(
     spatial_patches : np.ndarray,
@@ -31,19 +41,6 @@ def save_spatial_data(
     dem_crs_epsg    : int,
     save_path       : str = 'checkpoints/spatial_data.npz',
 ) -> None:
-    """
-    Save spatial patches and DEM georeferencing to .npz.
-
-    Parameters
-    ----------
-    spatial_patches : (N, C, H, W) array of extracted DEM patches
-    dem_transform   : rasterio Affine transform of the source DEM
-    dem_crs_epsg    : EPSG code of the DEM CRS (e.g. 3857)
-    save_path       : output path
-
-    The transform is stored as the 6 Affine coefficients [a,b,c,d,e,f]
-    so it can be reconstructed without rasterio at load time.
-    """
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -107,11 +104,8 @@ class FloodInferenceEngine:
         self.spatial_patches = data['spatial_patches']   # (6400, 11, 4, 4)
         self.patches_per_map = self.spatial_patches.shape[0]
 
-        # Load the DEM transform that was used when patches were extracted.
-        # This is the authoritative transform for Bands 1 & 2 — it must match
-        # Band 3 (barangay rasterization) to keep all bands spatially aligned.
         if 'transform_coeffs' in data:
-            tc = data['transform_coeffs']               # [a, b, c, d, e, f]
+            tc = data['transform_coeffs']              
             self.dem_transform = Affine(
                 tc[0], tc[1], tc[2],
                 tc[3], tc[4], tc[5],
@@ -121,9 +115,6 @@ class FloodInferenceEngine:
             print(f"  dem_transform : {self.dem_transform}")
             print(f"  dem_crs_epsg  : {self.dem_crs_epsg}")
         else:
-            # Fallback for old .npz files that pre-date this fix.
-            # The notebook must manually set dem_transform to match the
-            # original DEM — predictions will be spatially misaligned otherwise.
             self.dem_transform = None
             self.dem_crs_epsg  = None
             print("⚠  WARNING: spatial_data.npz has no transform_coeffs.")
@@ -287,9 +278,572 @@ class FloodInferenceEngine:
         print(f"  hasSoil     : {hasSoil}")
         print(f"  Warnings    : {len(warnings)}")
         print(f"\n  Flood class distribution:")
-        for cls_id, cls_name in FLOOD_CLASS_NAMES.items():
+        for cls_id, cls_name in FLOOD_LABELS.items():
             count = (flood_map == cls_id).sum()
             pct   = 100 * count / total_pixels
             print(f"    Class {cls_id} ({cls_name:<10}): "
                   f"{count:>7,} px  ({pct:>5.1f}%)")
         print(f"{'='*60}")
+
+
+
+
+# ── Predict with Confidence ───────────────────────────────────────────────────
+@torch.no_grad()
+def predict_with_confidence(engine, storm_type, depth_mm, hasDrainage, hasSoil,
+                             tpeak=None, batch_size=512):
+    conditioning_np, warnings = build_conditioning_vector(
+        storm_type  = storm_type,
+        depth_mm    = depth_mm,
+        rain_min    = engine.rain_min,
+        rain_max    = engine.rain_max,
+        depth_min   = engine.depth_min,   
+        depth_max   = engine.depth_max,   
+        hasDrainage = hasDrainage,
+        hasSoil     = hasSoil,
+        tpeak       = tpeak,
+    )
+    conditioning_all = np.tile(conditioning_np[np.newaxis], (engine.patches_per_map, 1))
+    spatial_all = np.stack([
+        engine._apply_channel_masking(engine.spatial_patches[i], hasDrainage, hasSoil)
+        for i in range(engine.patches_per_map)
+    ])
+    patch_preds = []
+    patch_confs = []
+    for start in range(0, engine.patches_per_map, batch_size):
+        end           = min(start + batch_size, engine.patches_per_map)
+        spatial_batch = torch.from_numpy(spatial_all[start:end]).float().to(engine.device)
+        cond_batch    = torch.from_numpy(conditioning_all[start:end]).float().to(engine.device)
+        logits, _     = engine.model(spatial_batch, cond_batch)
+        probs         = torch.softmax(logits, dim=1)
+        patch_preds.append(probs.argmax(dim=1).cpu().numpy())
+        patch_confs.append(probs.max(dim=1).values.cpu().numpy())
+    patch_preds = np.concatenate(patch_preds)
+    patch_confs = np.concatenate(patch_confs)
+    return {
+        'flood_map'  : engine._reconstruct_map(patch_preds),
+        'conf_map'   : engine._reconstruct_map(patch_confs.astype(np.float32)),
+        'patch_preds': patch_preds,
+        'patch_confs': patch_confs,
+        'warnings'   : warnings,
+        'config'     : {
+            'storm_type' : storm_type,
+            'depth_mm'   : depth_mm,
+            'tpeak'      : tpeak,
+            'hasDrainage': hasDrainage,
+            'hasSoil'    : hasSoil,
+        },
+    }
+
+def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = (21, 6)) -> None:
+    flood_cmap = mcolors.ListedColormap([FLOOD_COLORS[i] for i in range(5)])
+    flood_norm = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], ncolors=5)
+    conf_cmap  = 'RdYlGn'
+
+    with rasterio.open(tif_path) as src:
+        band1     = src.read(1)                              # flood class
+        band2     = src.read(2).astype(np.float32) / 1000.0  # confidence ×1000 → 0.0-1.0
+        band3     = src.read(3) if src.count >= 3 else None   # barangay PSGC
+        extent    = [
+            src.bounds.left, src.bounds.right,
+            src.bounds.bottom, src.bounds.top,
+        ]
+        crs       = src.crs
+        tags      = src.tags()
+        b1_tags   = src.tags(1)
+        b2_tags   = src.tags(2)
+        b3_tags   = src.tags(3) if src.count >= 3 else {}
+
+    # ── Print metadata ────────────────────────────────────────────────────────
+    print(f"\nGeoTIFF: {tif_path}")
+    print(f"  CRS       : {crs}")
+    print(f"  Extent    : {extent}")
+    print(f"  Band 1    : {b1_tags.get('description', 'Flood class')}")
+    print(f"  Band 2    : {b2_tags.get('description', 'Confidence')}")
+    if band3 is not None:
+        print(f"  Band 3    : {b3_tags.get('description', 'Barangay PSGC Code')}")
+    print(f"  Storm     : {tags.get('storm_type','?')}  "
+          f"{tags.get('depth_mm','?')}mm  "
+          f"tpeak={tags.get('tpeak','?')}  "
+          f"Drainage={tags.get('hasDrainage','?')}  "
+          f"Soil={tags.get('hasSoil','?')}")
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    n_cols = 3 if band3 is not None else 2
+    fig, axes = plt.subplots(1, n_cols, figsize=figsize)
+
+    # ── Band 1: Flood class ───────────────────────────────────────────────────
+    ax1 = axes[0]
+    im1 = ax1.imshow(
+        band1, cmap=flood_cmap, norm=flood_norm,
+        extent=extent, interpolation='nearest',
+        origin='upper',
+    )
+    ax1.set_title(
+        f"Band 1 — Flood Hazard Class\n"
+        f"Storm: {tags.get('storm_type','?')}  |  "
+        f"Depth: {tags.get('depth_mm','?')} mm  |  "
+        f"tpeak: {tags.get('tpeak','?')}",
+        fontsize=9, fontweight='bold', pad=6,
+    )
+    ax1.set_xlabel('Longitude', fontsize=8)
+    ax1.set_ylabel('Latitude',  fontsize=8)
+    ax1.tick_params(labelsize=7)
+
+    # Flood class legend
+    legend_patches = [
+        mpatches.Patch(facecolor=FLOOD_COLORS[i], edgecolor='gray',
+                       linewidth=0.5, label=f'Class {i} — {FLOOD_LABELS[i]}')
+        for i in range(5)
+    ]
+    ax1.legend(handles=legend_patches, loc='lower left', fontsize=7,
+               framealpha=0.85, title='Flood Class', title_fontsize=7)
+
+    # Class distribution annotation
+    total = band1.size
+    dist  = '\n'.join([
+        f"C{i} {FLOOD_LABELS[i]}: {100*(band1==i).sum()/total:.1f}%"
+        for i in range(5)
+    ])
+    ax1.text(
+        0.98, 0.98, dist,
+        transform=ax1.transAxes, ha='right', va='top',
+        fontsize=6.5,
+        bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                  edgecolor='lightgray', alpha=0.88),
+    )
+
+    # ── Band 2: Confidence ────────────────────────────────────────────────────
+    ax2  = axes[1]
+    im2  = ax2.imshow(
+        band2, cmap=conf_cmap, vmin=0.0, vmax=1.0,
+        extent=extent, interpolation='nearest',
+        origin='upper',
+    )
+    ax2.set_title(
+        f"Band 2 — Model Confidence\n"
+        f"Drainage: {'✓' if tags.get('hasDrainage')=='True' else '✗'}  |  "
+        f"Soil: {'✓' if tags.get('hasSoil')=='True' else '✗'}",
+        fontsize=9, fontweight='bold', pad=6,
+    )
+    ax2.set_xlabel('Longitude', fontsize=8)
+    ax2.set_ylabel('Latitude',  fontsize=8)
+    ax2.tick_params(labelsize=7)
+
+    # Colorbar
+    cbar = fig.colorbar(im2, ax=ax2, fraction=0.035, pad=0.04)
+    cbar.set_label('Confidence', fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+    cbar.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    cbar.ax.axhline(y=0.5, color='black', linewidth=1.2, linestyle='--')
+    cbar.ax.text(2.3, 0.5, 'uncertain\nthreshold',
+                 fontsize=6, va='center', color='black')
+
+    # Uncertain patch overlay
+    uncertain_overlay = np.where(band2 < 0.5, 1.0, np.nan).astype(np.float32)
+    ax2.imshow(uncertain_overlay, cmap='cool', alpha=0.30,
+               vmin=0, vmax=1, extent=extent,
+               interpolation='nearest', origin='upper')
+
+    # Confidence stats annotation
+    frac_low = (band2 < 0.5).mean() * 100
+    stats    = (
+        f"Mean : {band2.mean():.3f}\n"
+        f"Std  : {band2.std():.3f}\n"
+        f"Min  : {band2.min():.3f}\n"
+        f"Max  : {band2.max():.3f}\n"
+        f"Uncertain: {frac_low:.1f}%"
+    )
+    ax2.text(
+        0.98, 0.98, stats,
+        transform=ax2.transAxes, ha='right', va='top',
+        fontsize=6.5,
+        bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                  edgecolor='lightgray', alpha=0.88),
+    )
+
+    # ── Band 3: Barangay PSGC Code ────────────────────────────────────────────
+    if band3 is not None:
+        ax3 = axes[2]
+
+        # Mask zeros (background / nodata) so they render as white
+        bar_masked = np.ma.masked_equal(band3, 0)
+
+        # Build a qualitative colormap with enough unique colors
+        unique_codes = np.unique(band3[band3 > 0])
+        n_unique     = max(len(unique_codes), 1)
+        bar_cmap     = plt.cm.get_cmap('tab20', n_unique)
+        bar_cmap.set_bad(color='white')   # masked (background) → white
+
+        im3 = ax3.imshow(
+            bar_masked, cmap=bar_cmap,
+            extent=extent, interpolation='nearest',
+            origin='upper',
+        )
+        ax3.set_title(
+            f"Band 3 — Barangay Boundaries\n"
+            f"PSGC codes  |  {n_unique} barangay(s) in extent",
+            fontsize=9, fontweight='bold', pad=6,
+        )
+        ax3.set_xlabel('Longitude', fontsize=8)
+        ax3.set_ylabel('Latitude',  fontsize=8)
+        ax3.tick_params(labelsize=7)
+
+        # Colorbar showing PSGC code range
+        cbar3 = fig.colorbar(im3, ax=ax3, fraction=0.035, pad=0.04)
+        cbar3.set_label('PSGC Code', fontsize=8)
+        cbar3.ax.tick_params(labelsize=7)
+
+        # Stats annotation
+        bar_stats = (
+            f"Barangays : {n_unique}\n"
+            f"Min code  : {int(unique_codes.min()) if n_unique else 'N/A'}\n"
+            f"Max code  : {int(unique_codes.max()) if n_unique else 'N/A'}\n"
+            f"Coverage  : {100*(band3>0).mean():.1f}%"
+        )
+        ax3.text(
+            0.98, 0.98, bar_stats,
+            transform=ax3.transAxes, ha='right', va='top',
+            fontsize=6.5,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                      edgecolor='lightgray', alpha=0.88),
+        )
+
+    fig.suptitle(
+        f'EXP-DES-2 — GeoTIFF Result Visualization\n{tif_path}',
+        fontsize=10, fontweight='bold', y=1.02,
+    )
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+        print(f"✓ Visualization saved → {save_path}")
+
+    plt.show()
+
+def save_result_as_tif(result, save_path, transform, crs, map_size=320, barangay_band=None):
+    flood_map = result['flood_map'].astype(np.float32)
+    H, W      = flood_map.shape  
+    conf_map  = result['conf_map'].astype(np.float32)
+    bar_band = barangay_band
+
+    with rasterio.open(
+        save_path, 'w',
+        driver    = 'GTiff',
+        height    = H, width = W,
+        count     = 3,
+        dtype     = 'int32',
+        crs       = crs,
+        transform = transform,
+        nodata    = -1,
+    ) as dst:
+        dst.write(flood_map.astype(np.int32),         1)   # flood class
+        dst.write((conf_map * 1000).astype(np.int32), 2)   # confidence ×1000
+        dst.write(bar_band.astype(np.int32),          3)   # PSGC code
+        cfg_meta = result.get('config', {})
+        dst.update_tags(
+            BAND_1      = 'Flood class (0=No Flood 1=Light 2=Moderate 3=Heavy 4=Extreme)',
+            BAND_2      = 'Confidence x1000 (divide by 1000 for 0.0-1.0)',
+            BAND_3      = 'Barangay PSGC Code (from manila_barangay_geojson.geojson)',
+            STORM_LABEL = result.get('storm_label', ''),
+            storm_type  = str(cfg_meta.get('storm_type',  '')),
+            depth_mm    = str(cfg_meta.get('depth_mm',    '')),
+            tpeak       = str(cfg_meta.get('tpeak',       '')),
+            hasDrainage = str(cfg_meta.get('hasDrainage', '')),
+            hasSoil     = str(cfg_meta.get('hasSoil',     '')),
+        )
+
+    print(f"✓ Saved → {save_path}")
+    
+def build_subtitle(cfg: dict) -> str:
+    parts = [f"Storm: {cfg['storm_type']}", f"Depth: {cfg['depth_mm']} mm"]
+    if cfg['tpeak'] is not None:
+        parts.append(f"tpeak: {cfg['tpeak']}")
+    parts.append(f"Drainage: {'✓' if cfg['hasDrainage'] else '✗'}")
+    parts.append(f"Soil: {'✓' if cfg['hasSoil'] else '✗'}")
+    return '  |  '.join(parts)
+
+def compute_class_pcts(flood_map):
+    total = flood_map.size
+    return {i: 100 * (flood_map == i).sum() / total for i in range(5)}
+
+def add_warning_banner(ax, warnings):
+    if warnings:
+        ax.text(
+            0.5, 0.02,
+            f'⚠ {len(warnings)} warning(s) — inputs outside training range',
+            transform=ax.transAxes, ha='center', va='bottom',
+            fontsize=7.5, color='white',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='#B8860B',
+                      edgecolor='none', alpha=0.88),
+        )
+
+def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W):
+    gdf = gpd.read_file(geojson_path)
+    gdf = gdf.to_crs(dst_crs)
+    gdf = gdf.dropna(subset=['psgc_code']).copy()
+
+    # Drop null / empty / invalid geometries
+    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna() & gdf.geometry.is_valid]
+
+    gdf['psgc_int'] = gdf['psgc_code'].astype(float).astype(int)
+
+    # Clip to DEM grid extent
+    left   = dst_transform.c
+    top    = dst_transform.f
+    right  = left + dst_transform.a * W
+    bottom = top  + dst_transform.e * H
+    grid_box = box(left, min(top, bottom), right, max(top, bottom))
+    gdf = gdf[gdf.geometry.intersects(grid_box)]
+
+    print(f"  Rasterizing {len(gdf)} barangays within DEM extent ...")
+
+    shapes = [
+        (geom, psgc)
+        for geom, psgc in zip(gdf.geometry, gdf['psgc_int'])
+        if geom is not None and not geom.is_empty
+    ]
+
+    band = rasterize(
+        shapes,
+        out_shape   = (H, W),
+        transform   = dst_transform,
+        fill        = 0,
+        dtype       = 'int32',
+        all_touched = True,
+    )
+    return band
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ABLATION STUDY — 4-pass per storm type
+# ══════════════════════════════════════════════════════════════════════════════
+
+ABLATION_CONFIGS = [
+    dict(label='Full (Drainage + Soil)',  hasDrainage=True,  hasSoil=True),
+    dict(label='Drainage only',           hasDrainage=True,  hasSoil=False),
+    dict(label='Soil only',               hasDrainage=False, hasSoil=True),
+    dict(label='Neither (minimal)',       hasDrainage=False, hasSoil=False),
+]
+
+STORM_CONFIGS = [
+    dict(storm_type='triangular',   depth_mm=9,  tpeak=0.5,  storm_label='Triangular | 9mm | tpeak=0.5'),
+    dict(storm_type='front-loaded', depth_mm=34, tpeak=None, storm_label='Front-loaded | 34mm'),
+    dict(storm_type='balanced',     depth_mm=31, tpeak=None, storm_label='Balanced | 31mm'),
+    dict(storm_type='back-loaded',  depth_mm=35, tpeak=None, storm_label='Back-loaded | 35mm'),
+]
+
+def run_ablation_study(engine: 'FloodInferenceEngine') -> dict:
+    all_results = {}
+    for sc in STORM_CONFIGS:
+        all_results[sc['storm_label']] = {}
+        for ab in ABLATION_CONFIGS:
+            all_results[sc['storm_label']][ab['label']] = predict_with_confidence(
+                engine,
+                storm_type  = sc['storm_type'],
+                depth_mm    = sc['depth_mm'],
+                tpeak       = sc['tpeak'],
+                hasDrainage = ab['hasDrainage'],
+                hasSoil     = ab['hasSoil'],
+            )
+    return all_results
+
+
+def plot_4pass_flood(storm_label: str, all_results: dict, cfg, save_name: str) -> None:
+    fig, axes = plt.subplots(
+        4, 2, figsize=(13, 20),
+        gridspec_kw={'width_ratios': [2.5, 1], 'hspace': 0.40, 'wspace': 0.25},
+    )
+    for row, ab in enumerate(ABLATION_CONFIGS):
+        result   = all_results[storm_label][ab['label']]
+        ax_flood = axes[row, 0]
+        ax_bar   = axes[row, 1]
+        pcts     = compute_class_pcts(result['flood_map'])
+
+        ax_flood.imshow(result['flood_map'], cmap=flood_cmap, norm=flood_norm,
+                        interpolation='nearest')
+        ax_flood.set_title(
+            f"{ab['label']}\n{build_subtitle(result['config'])}",
+            fontsize=9, fontweight='bold', pad=5)
+        ax_flood.axis('off')
+        add_warning_banner(ax_flood, result['warnings'])
+
+        bar_labels = [FLOOD_LABELS[i] for i in range(5)]
+        values     = [pcts[i] for i in range(5)]
+        colors     = [FLOOD_COLORS[i] for i in range(5)]
+        bars       = ax_bar.barh(bar_labels, values, color=colors,
+                                 edgecolor='gray', linewidth=0.5, height=0.6)
+        for bar, val in zip(bars, values):
+            if val > 1.5:
+                ax_bar.text(bar.get_width() - 0.5,
+                            bar.get_y() + bar.get_height() / 2,
+                            f'{val:.1f}%', va='center', ha='right',
+                            fontsize=8, color='white', fontweight='bold')
+            elif val > 0.1:
+                ax_bar.text(bar.get_width() + 0.5,
+                            bar.get_y() + bar.get_height() / 2,
+                            f'{val:.1f}%', va='center', ha='left',
+                            fontsize=8, color='#333333')
+        ax_bar.set_xlim(0, 100)
+        ax_bar.set_xlabel('Coverage (%)', fontsize=8)
+        ax_bar.set_title('Class\nDistribution', fontsize=8.5,
+                         fontweight='bold', pad=5)
+        ax_bar.tick_params(axis='both', labelsize=8)
+        ax_bar.spines['top'].set_visible(False)
+        ax_bar.spines['right'].set_visible(False)
+        ax_bar.invert_yaxis()
+
+    fig.legend(handles=legend_patches, loc='lower center', ncol=5, fontsize=9,
+               frameon=True, title='Flood Severity Classes', title_fontsize=9,
+               bbox_to_anchor=(0.5, -0.005))
+    fig.suptitle(
+        f'EXP-DES-2 — 4-Pass Ablation | {storm_label}\nManila Core',
+        fontsize=12, fontweight='bold', y=1.01)
+    path = str(cfg.train.output_dir / save_name)
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f'✓ Saved → {path}')
+
+
+def plot_4pass_confidence(storm_label: str, all_results: dict, cfg, save_name: str) -> None:
+    fig, axes = plt.subplots(
+        4, 2, figsize=(13, 20),
+        gridspec_kw={'width_ratios': [2.5, 1], 'hspace': 0.40, 'wspace': 0.30},
+    )
+    conf_cmap = 'RdYlGn'
+    for row, ab in enumerate(ABLATION_CONFIGS):
+        result      = all_results[storm_label][ab['label']]
+        ax_conf     = axes[row, 0]
+        ax_hist     = axes[row, 1]
+        conf_map    = result['conf_map']
+        patch_confs = result['patch_confs']
+        frac_low    = (patch_confs < 0.5).mean() * 100
+
+        im = ax_conf.imshow(conf_map, cmap=conf_cmap, vmin=0.0, vmax=1.0,
+                            interpolation='nearest')
+        ax_conf.set_title(
+            f"{ab['label']}\n{build_subtitle(result['config'])}\n"
+            f"Model Confidence (softmax max-probability per patch)",
+            fontsize=8.5, fontweight='bold', pad=5)
+        ax_conf.axis('off')
+        add_warning_banner(ax_conf, result['warnings'])
+
+        cbar = plt.colorbar(im, ax=ax_conf, fraction=0.035, pad=0.03)
+        cbar.set_label('Confidence', fontsize=8)
+        cbar.ax.tick_params(labelsize=7)
+        cbar.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+        cbar.ax.axhline(y=0.5, color='black', linewidth=1.2, linestyle='--')
+        cbar.ax.text(2.3, 0.5, 'uncertain\nthreshold', fontsize=6,
+                     va='center', color='black')
+
+        uncertain_overlay = conf_map.copy().astype(float)
+        uncertain_overlay[conf_map >= 0.5] = np.nan
+        uncertain_overlay[conf_map <  0.5] = 1.0
+        ax_conf.imshow(uncertain_overlay, cmap='cool', alpha=0.30,
+                       vmin=0, vmax=1, interpolation='nearest')
+        ax_conf.text(0.02, 0.98, f'{frac_low:.1f}% uncertain\n(conf < 0.5)',
+                     transform=ax_conf.transAxes, ha='left', va='top',
+                     fontsize=7.5,
+                     color='red' if frac_low > 20 else 'gray',
+                     bbox=dict(boxstyle='round,pad=0.25', facecolor='white',
+                               edgecolor='lightgray', alpha=0.85))
+
+        ax_hist.hist(patch_confs, bins=20, range=(0, 1), color='steelblue',
+                     edgecolor='white', linewidth=0.4, alpha=0.85)
+        ax_hist.axvline(x=0.5, color='red', linewidth=1.2, linestyle='--',
+                        label='Uncertain (0.5)')
+        ax_hist.axvline(x=patch_confs.mean(), color='orange', linewidth=1.2,
+                        linestyle='-', label=f"Mean ({patch_confs.mean():.2f})")
+        ax_hist.set_xlabel('Confidence', fontsize=8)
+        ax_hist.set_ylabel('Patches', fontsize=8)
+        ax_hist.set_title('Confidence\nDistribution', fontsize=8.5,
+                          fontweight='bold', pad=5)
+        ax_hist.tick_params(labelsize=7)
+        ax_hist.legend(fontsize=6.5, loc='upper left')
+        ax_hist.spines['top'].set_visible(False)
+        ax_hist.spines['right'].set_visible(False)
+        ax_hist.text(0.97, 0.97, f'{frac_low:.1f}%\nuncertain',
+                     transform=ax_hist.transAxes, ha='right', va='top',
+                     fontsize=7.5,
+                     color='red' if frac_low > 20 else 'gray',
+                     bbox=dict(boxstyle='round,pad=0.25', facecolor='white',
+                               edgecolor='lightgray', alpha=0.85))
+
+    fig.suptitle(
+        f'EXP-DES-2 — Confidence Maps | {storm_label}\nManila Core',
+        fontsize=12, fontweight='bold', y=1.01)
+    path = str(cfg.train.output_dir / save_name)
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f'✓ Saved → {path}')
+
+
+def run_inference(
+    engine       : 'FloodInferenceEngine',
+    storm_type   : str,
+    depth_mm     : float,
+    hasDrainage  : bool,
+    hasSoil      : bool,
+    output_dir   : str,
+    tpeak        : Optional[float]  = None,
+    geojson_path : Optional[str]    = None,
+    stem         : Optional[str]    = None,
+    figsize      : tuple            = (21, 6),
+) -> dict:
+    
+    import rasterio.crs
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Auto-generate a readable filename stem ────────────────────────────────
+    if stem is None:
+        drain_tag = 'drain' if hasDrainage else 'nodrain'
+        soil_tag  = 'soil'  if hasSoil     else 'nosoil'
+        tpeak_tag = f'_tp{tpeak}'.replace('.', '') if tpeak is not None else ''
+        stem = f'{storm_type}_{int(depth_mm)}mm{tpeak_tag}_{drain_tag}_{soil_tag}'
+
+    tif_path = str(output_dir / f'{stem}.tif')
+    viz_path = str(output_dir / f'{stem}_viz.png')
+
+    # ── 1. Predict ────────────────────────────────────────────────────────────
+    print(f'\n[run_inference] {stem}')
+    result = predict_with_confidence(
+        engine,
+        storm_type  = storm_type,
+        depth_mm    = depth_mm,
+        hasDrainage = hasDrainage,
+        hasSoil     = hasSoil,
+        tpeak       = tpeak,
+    )
+
+    # ── 2. Build / load barangay band ─────────────────────────────────────────
+    H, W = result['flood_map'].shape
+    dem_crs = rasterio.crs.CRS.from_epsg(engine.dem_crs_epsg)
+
+    if geojson_path is not None:
+        barangay_band = _load_barangay_band_from_geojson(
+            geojson_path, engine.dem_transform, dem_crs, H, W
+        )
+    else:
+        barangay_band = np.zeros((H, W), dtype=np.int32)
+
+    # ── 3. Save 3-band GeoTIFF ────────────────────────────────────────────────
+    save_result_as_tif(
+        result        = result,
+        save_path     = tif_path,
+        transform     = engine.dem_transform,
+        crs           = dem_crs,
+        barangay_band = barangay_band,
+    )
+
+    # ── 4. Visualize ──────────────────────────────────────────────────────────
+    visualize_result_tif(
+        tif_path  = tif_path,
+        save_path = viz_path,
+        figsize   = figsize,
+    )
+
+    result['tif_path'] = tif_path
+    result['viz_path'] = viz_path
+    print(f'✓ Done  →  {tif_path}')
+    print(f'          {viz_path}')
+    return result
