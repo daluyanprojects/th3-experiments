@@ -2,20 +2,20 @@
   <PAMRasterBand band="1">
     <Histograms>
       <HistItem>
-        <HistMin>-0.4</HistMin>
-        <HistMax>4.4</HistMax>
-        <BucketCount>5</BucketCount>
+        <HistMin>0.625</HistMin>
+        <HistMax>4.375</HistMax>
+        <BucketCount>4</BucketCount>
         <IncludeOutOfRange>0</IncludeOutOfRange>
         <Approximate>0</Approximate>
-        <HistCounts>65456|3840|20400|10992|1712</HistCounts>
+        <HistCounts>3840|20400|10992|1712</HistCounts>
       </HistItem>
     </Histograms>
     <Metadata>
-      <MDI key="STATISTICS_MINIMUM">0</MDI>
+      <MDI key="STATISTICS_MINIMUM">1</MDI>
       <MDI key="STATISTICS_MAXIMUM">4</MDI>
-      <MDI key="STATISTICS_MEAN">0.82484375</MDI>
-      <MDI key="STATISTICS_STDDEV">1.1779649986676</MDI>
-      <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
+      <MDI key="STATISTICS_MEAN">2.2862711130359</MDI>
+      <MDI key="STATISTICS_STDDEV">0.71055117843053</MDI>
+      <MDI key="STATISTICS_VALID_PERCENT">36.08</MDI>
     </Metadata>
   </PAMRasterBand>
   <PAMRasterBand band="2">

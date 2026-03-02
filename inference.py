@@ -337,14 +337,17 @@ def predict_with_confidence(engine, storm_type, depth_mm, hasDrainage, hasSoil,
     }
 
 def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = (21, 6)) -> None:
-    flood_cmap = mcolors.ListedColormap([FLOOD_COLORS[i] for i in range(5)])
+    # ── EDITED: Class 0 should be transparent (alpha=0.0) ──
+    flood_colors_rgba = [(1.0, 1.0, 1.0, 0.0)] + [mcolors.to_rgba(FLOOD_COLORS[i]) for i in range(1, 5)]
+    flood_cmap = mcolors.ListedColormap(flood_colors_rgba)
     flood_norm = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], ncolors=5)
     conf_cmap  = 'RdYlGn'
 
     with rasterio.open(tif_path) as src:
-        band1     = src.read(1)                              # flood class
-        band2     = src.read(2).astype(np.float32) / 1000.0  # confidence ×1000 → 0.0-1.0
-        band3     = src.read(3) if src.count >= 3 else None   # barangay PSGC
+        band1_raw = src.read(1).astype(np.int32)
+        band2_raw = src.read(2).astype(np.float32) / 1000.0
+        band3_raw = src.read(3) if src.count >= 3 else None
+        nodata    = src.nodata
         extent    = [
             src.bounds.left, src.bounds.right,
             src.bounds.bottom, src.bounds.top,
@@ -354,20 +357,25 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
         b1_tags   = src.tags(1)
         b2_tags   = src.tags(2)
         b3_tags   = src.tags(3) if src.count >= 3 else {}
+    
+    valid_band1_2 = band1_raw != int(nodata) if nodata is not None else np.ones_like(band1_raw, dtype=bool)
+    band1  = np.where(valid_band1_2, band1_raw.astype(float), np.nan)
+    band2  = np.where(valid_band1_2, band2_raw, np.nan)
+    
+    if band3_raw is not None:
+        valid_band3 = band3_raw != int(nodata) if nodata is not None else np.ones_like(band3_raw, dtype=bool)
+        band3 = np.where(valid_band3, band3_raw.astype(float), np.nan)
+    else:
+        band3 = None
+        valid_band3 = None
 
     # ── Print metadata ────────────────────────────────────────────────────────
     print(f"\nGeoTIFF: {tif_path}")
-    print(f"  CRS       : {crs}")
-    print(f"  Extent    : {extent}")
     print(f"  Band 1    : {b1_tags.get('description', 'Flood class')}")
     print(f"  Band 2    : {b2_tags.get('description', 'Confidence')}")
     if band3 is not None:
         print(f"  Band 3    : {b3_tags.get('description', 'Barangay PSGC Code')}")
-    print(f"  Storm     : {tags.get('storm_type','?')}  "
-          f"{tags.get('depth_mm','?')}mm  "
-          f"tpeak={tags.get('tpeak','?')}  "
-          f"Drainage={tags.get('hasDrainage','?')}  "
-          f"Soil={tags.get('hasSoil','?')}")
+    print(f"  Storm     : {tags.get('storm_type','?')}  {tags.get('depth_mm','?')}mm  tpeak={tags.get('tpeak','?')}")
 
     # ── Figure ────────────────────────────────────────────────────────────────
     n_cols = 3 if band3 is not None else 2
@@ -375,23 +383,16 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
 
     # ── Band 1: Flood class ───────────────────────────────────────────────────
     ax1 = axes[0]
-    im1 = ax1.imshow(
-        band1, cmap=flood_cmap, norm=flood_norm,
-        extent=extent, interpolation='nearest',
-        origin='upper',
-    )
-    ax1.set_title(
-        f"Band 1 — Flood Hazard Class\n"
-        f"Storm: {tags.get('storm_type','?')}  |  "
-        f"Depth: {tags.get('depth_mm','?')} mm  |  "
-        f"tpeak: {tags.get('tpeak','?')}",
-        fontsize=9, fontweight='bold', pad=6,
-    )
+    ax1.imshow(band1, cmap=flood_cmap, norm=flood_norm,
+               extent=extent, interpolation='nearest', origin='upper')
+    tpeak_str = tags.get('tpeak', 'None')
+    title1 = (f"Band 1 — Flood Hazard Class\n"
+              f"Storm: {tags.get('storm_type','?')}  |  Depth: {tags.get('depth_mm','?')} mm"
+              + (f"  |  tpeak: {tpeak_str}" if tpeak_str not in ('None', '', 'none') else ''))
+    ax1.set_title(title1, fontsize=9, fontweight='bold', pad=6)
     ax1.set_xlabel('Longitude', fontsize=8)
-    ax1.set_ylabel('Latitude',  fontsize=8)
+    ax1.set_ylabel('Latitude', fontsize=8)
     ax1.tick_params(labelsize=7)
-
-    # Flood class legend
     legend_patches = [
         mpatches.Patch(facecolor=FLOOD_COLORS[i], edgecolor='gray',
                        linewidth=0.5, label=f'Class {i} — {FLOOD_LABELS[i]}')
@@ -399,13 +400,14 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
     ]
     ax1.legend(handles=legend_patches, loc='lower left', fontsize=7,
                framealpha=0.85, title='Flood Class', title_fontsize=7)
-
-    # Class distribution annotation
-    total = band1.size
-    dist  = '\n'.join([
-        f"C{i} {FLOOD_LABELS[i]}: {100*(band1==i).sum()/total:.1f}%"
-        for i in range(5)
-    ])
+    total = int(np.sum(valid_band1_2))
+    if total > 0:
+        dist = '\n'.join([
+            f"C{i} {FLOOD_LABELS[i]}: {100*np.nansum(band1==i)/total:.1f}%"
+            for i in range(5)
+        ])
+    else:
+        dist = "No valid data"
     ax1.text(
         0.98, 0.98, dist,
         transform=ax1.transAxes, ha='right', va='top',
@@ -418,8 +420,7 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
     ax2  = axes[1]
     im2  = ax2.imshow(
         band2, cmap=conf_cmap, vmin=0.0, vmax=1.0,
-        extent=extent, interpolation='nearest',
-        origin='upper',
+        extent=extent, interpolation='nearest', origin='upper',
     )
     ax2.set_title(
         f"Band 2 — Model Confidence\n"
@@ -430,8 +431,6 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
     ax2.set_xlabel('Longitude', fontsize=8)
     ax2.set_ylabel('Latitude',  fontsize=8)
     ax2.tick_params(labelsize=7)
-
-    # Colorbar
     cbar = fig.colorbar(im2, ax=ax2, fraction=0.035, pad=0.04)
     cbar.set_label('Confidence', fontsize=8)
     cbar.ax.tick_params(labelsize=7)
@@ -439,14 +438,10 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
     cbar.ax.axhline(y=0.5, color='black', linewidth=1.2, linestyle='--')
     cbar.ax.text(2.3, 0.5, 'uncertain\nthreshold',
                  fontsize=6, va='center', color='black')
-
-    # Uncertain patch overlay
-    uncertain_overlay = np.where(band2 < 0.5, 1.0, np.nan).astype(np.float32)
+    uncertain_overlay = np.where(~np.isnan(band2) & (band2 < 0.5), 1.0, np.nan).astype(np.float32)
     ax2.imshow(uncertain_overlay, cmap='cool', alpha=0.30,
                vmin=0, vmax=1, extent=extent,
                interpolation='nearest', origin='upper')
-
-    # Confidence stats annotation
     frac_low = (band2 < 0.5).mean() * 100
     stats    = (
         f"Mean : {band2.mean():.3f}\n"
@@ -466,41 +461,30 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
     # ── Band 3: Barangay PSGC Code ────────────────────────────────────────────
     if band3 is not None:
         ax3 = axes[2]
-
-        # Mask zeros (background / nodata) so they render as white
-        bar_masked = np.ma.masked_equal(band3, 0)
-
-        # Build a qualitative colormap with enough unique colors
-        unique_codes = np.unique(band3[band3 > 0])
+        bar_masked   = np.ma.masked_invalid(np.where((band3 > 0) & ~np.isnan(band3), band3, np.nan))
+        unique_codes = np.unique(band3_raw[(band3_raw > 0) & (band3_raw != int(nodata))])
         n_unique     = max(len(unique_codes), 1)
         bar_cmap     = plt.cm.get_cmap('tab20', n_unique)
-        bar_cmap.set_bad(color='white')   # masked (background) → white
-
+        bar_cmap.set_bad(color='white')
         im3 = ax3.imshow(
             bar_masked, cmap=bar_cmap,
-            extent=extent, interpolation='nearest',
-            origin='upper',
+            extent=extent, interpolation='nearest', origin='upper',
         )
         ax3.set_title(
-            f"Band 3 — Barangay Boundaries\n"
-            f"PSGC codes  |  {n_unique} barangay(s) in extent",
+            f"Band 3 — Barangay Boundaries\nPSGC codes  |  {n_unique} barangay(s) in extent",
             fontsize=9, fontweight='bold', pad=6,
         )
         ax3.set_xlabel('Longitude', fontsize=8)
         ax3.set_ylabel('Latitude',  fontsize=8)
         ax3.tick_params(labelsize=7)
-
-        # Colorbar showing PSGC code range
         cbar3 = fig.colorbar(im3, ax=ax3, fraction=0.035, pad=0.04)
         cbar3.set_label('PSGC Code', fontsize=8)
         cbar3.ax.tick_params(labelsize=7)
-
-        # Stats annotation
         bar_stats = (
             f"Barangays : {n_unique}\n"
             f"Min code  : {int(unique_codes.min()) if n_unique else 'N/A'}\n"
             f"Max code  : {int(unique_codes.max()) if n_unique else 'N/A'}\n"
-            f"Coverage  : {100*(band3>0).mean():.1f}%"
+            f"Coverage  : {100*(band3_raw>0).mean():.1f}%"
         )
         ax3.text(
             0.98, 0.98, bar_stats,
@@ -523,10 +507,16 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
     plt.show()
 
 def save_result_as_tif(result, save_path, transform, crs, map_size=320, barangay_band=None):
-    flood_map = result['flood_map'].astype(np.float32)
+    flood_map = result['flood_map'].astype(np.int32)
     H, W      = flood_map.shape  
     conf_map  = result['conf_map'].astype(np.float32)
-    bar_band = barangay_band
+    bar_band = barangay_band if barangay_band is not None else np.zeros((H, W), dtype=np.int32)
+
+    # ── EDITED: Set class 0 (No Flood) to -1 (nodata) so it's transparent in QGIS ──
+    b1 = flood_map.copy()
+    b1[b1 == 0] = -1
+    b2 = (conf_map * 1000).astype(np.int32)
+    b3 = bar_band.astype(np.int32)
 
     with rasterio.open(
         save_path, 'w',
@@ -537,16 +527,27 @@ def save_result_as_tif(result, save_path, transform, crs, map_size=320, barangay
         crs       = crs,
         transform = transform,
         nodata    = -1,
+        compress  = 'lzw',
     ) as dst:
-        dst.write(flood_map.astype(np.int32),         1)   # flood class
-        dst.write((conf_map * 1000).astype(np.int32), 2)   # confidence ×1000
-        dst.write(bar_band.astype(np.int32),          3)   # PSGC code
+        dst.write(b1, 1)   # flood class (0→-1 for transparency)
+        dst.write(b2, 2)   # confidence ×1000
+        dst.write(b3, 3)   # PSGC code
+        
         cfg_meta = result.get('config', {})
         dst.update_tags(
-            BAND_1      = 'Flood class (0=No Flood 1=Light 2=Moderate 3=Heavy 4=Extreme)',
-            BAND_2      = 'Confidence x1000 (divide by 1000 for 0.0-1.0)',
-            BAND_3      = 'Barangay PSGC Code (from manila_barangay_geojson.geojson)',
-            STORM_LABEL = result.get('storm_label', ''),
+            1,
+            description='Flood class (0=Transparent 1=Light 2=Moderate 3=Heavy 4=Extreme)',
+        )
+        dst.update_tags(
+            2,
+            description='Confidence x1000 — divide by 1000 for 0.0-1.0',
+        )
+        dst.update_tags(
+            3,
+            description='Barangay PSGC Code (-1=outside Manila extent)',
+        )
+        dst.update_tags(
+            model       = 'FloodInferenceEngine ViTFloodClassifier',
             storm_type  = str(cfg_meta.get('storm_type',  '')),
             depth_mm    = str(cfg_meta.get('depth_mm',    '')),
             tpeak       = str(cfg_meta.get('tpeak',       '')),
