@@ -13,7 +13,7 @@ import rasterio
 from shapely.geometry import box
 from rasterio.features import rasterize
 from rasterio.transform import Affine
-
+import warnings
 
 from hyetograph import build_conditioning_vector
 from vit import ViTFloodClassifier
@@ -34,6 +34,7 @@ FLOOD_LABELS = {0: 'No Flood', 1: 'Light', 2: 'Moderate', 3: 'Heavy', 4: 'Extrem
 flood_cmap = mcolors.ListedColormap([FLOOD_COLORS[i] for i in range(5)])
 flood_norm = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], ncolors=5)
 legend_patches = [ mpatches.Patch(facecolor=FLOOD_COLORS[i], edgecolor='gray', linewidth=0.5, label=f'Class {i} — {FLOOD_LABELS[i]}') for i in range(5)]
+warnings.filterwarnings("ignore", message="GeoSeries.notna", category=UserWarning)
 
 def save_spatial_data(
     spatial_patches : np.ndarray,
