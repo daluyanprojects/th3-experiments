@@ -237,21 +237,6 @@ class FloodInference:
         verbose:      bool = True,
         strict:       bool = False,
     ) -> List[Dict]:
-        """
-        Run predictions for multiple storm configurations.
-
-        Args:
-            test_configs : list of dicts, each with:
-                           'storm_type', 'depth_mm', optionally 'tpeak'
-            n_h, n_w     : full grid dimensions (passed to every predict() call)
-            batch_size   : override default batch size
-            verbose      : print progress per config
-            strict       : validation strictness
-
-        Returns:
-            List of result dicts (one per config).
-            On error, dict contains 'error' key with message string.
-        """
         results = []
 
         for i, config in enumerate(test_configs):
@@ -282,11 +267,6 @@ class FloodInference:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _compute_statistics(self, patch_predictions: np.ndarray) -> Dict:
-        """
-        Compute flood class distribution over Manila patches only.
-        Uses patch_predictions (Manila-level), not the full reconstructed grid,
-        so non-Manila zero-padding never inflates the No Flood percentage.
-        """
         total = patch_predictions.size
         stats = {}
         for cls_id, cls_name in FLOOD_CLASS_NAMES.items():
