@@ -11,6 +11,9 @@ from shapely.geometry import box
 import matplotlib.pyplot as plt
 from pathlib import Path
 from hyetograph import build_conditioning_vector as hyeto_build_conditioning
+import warnings
+import rasterio.crs
+from pathlib import Path
 
 # ── Visual setup ──────────────────────────────────────────────────────────────
 FLOOD_COLORS = {
@@ -38,6 +41,7 @@ VALID_RANGES = {
     'triangular':   {'depth_mm': (5, 77),   'tpeak': (0.1, 0.9)},
 }
 
+warnings.filterwarnings("ignore", message="GeoSeries.notna", category=UserWarning)
 
 def validate_storm_input(storm_type: str, depth_mm: float, tpeak: Optional[float] = None, strict: bool = False) -> Tuple[bool, List[str]]:
     if storm_type not in VALID_RANGES:
@@ -76,7 +80,7 @@ def validate_storm_input(storm_type: str, depth_mm: float, tpeak: Optional[float
     return True, warnings
 
 # ── Inference Engine ──────────────────────────────────────────────────────────
-class FloodInference:
+class FloodInferenceEngine:
     def __init__(
         self,
         model:                torch.nn.Module,
@@ -507,20 +511,26 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
 
 def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W):
     gdf = gpd.read_file(geojson_path)
-    gdf = gdf.to_crs(dst_crs)
+
+    if dst_crs is not None:
+        gdf = gdf.to_crs(dst_crs)
+
+    # Drop missing PSGC
     gdf = gdf.dropna(subset=['psgc_code']).copy()
 
-    # Drop null / empty / invalid geometries
-    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna() & gdf.geometry.is_valid]
+    # Clean geometries (modern GeoPandas-safe way)
+    gdf = gdf.loc[gdf.geometry.notna() & (~gdf.geometry.is_empty) & (gdf.geometry.is_valid)].copy()
 
     gdf['psgc_int'] = gdf['psgc_code'].astype(float).astype(int)
 
-    # Clip to DEM grid extent
+    # DEM grid extent
     left   = dst_transform.c
     top    = dst_transform.f
     right  = left + dst_transform.a * W
     bottom = top  + dst_transform.e * H
+
     grid_box = box(left, min(top, bottom), right, max(top, bottom))
+
     gdf = gdf[gdf.geometry.intersects(grid_box)]
 
     print(f"  Rasterizing {len(gdf)} barangays within DEM extent ...")
@@ -528,7 +538,6 @@ def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W)
     shapes = [
         (geom, psgc)
         for geom, psgc in zip(gdf.geometry, gdf['psgc_int'])
-        if geom is not None and not geom.is_empty
     ]
 
     band = rasterize(
@@ -539,6 +548,7 @@ def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W)
         dtype       = 'int32',
         all_touched = True,
     )
+
     return band
 
 def _plot_flood_map(ax_flood, ax_bar, flood_disp, pcts, cfg_label, subtitle, N_H, N_W,
@@ -704,3 +714,87 @@ def run_and_export(
         )
 
     print("\n✓ All configurations processed.")
+
+def run_inference(
+    engine: FloodInferenceEngine,
+    storm_type: str,
+    depth_mm: float,
+    output_dir: str,
+    N_H: int,
+    N_W: int,
+    tpeak: Optional[float] = None,
+    has_barangay: bool = False,
+    geojson_path: Optional[str] = None,
+    stem: Optional[str] = None,
+    figsize: tuple = (21, 6),
+) -> Dict:
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if stem is None:
+        # Create a tag for tpeak (e.g., 0.5 -> tp05) only if provided
+        tp_tag = f"_tp{str(tpeak).replace('.', '')}" if tpeak is not None else ""
+        stem = f"{storm_type}_{int(depth_mm)}mm{tp_tag}"
+
+    tif_path = str(output_dir / f"{stem}.tif")
+    viz_path = str(output_dir / f"{stem}_viz.png")
+
+    print(f"\n[run_inference] Starting: {stem}")
+
+    # 2. Execute Prediction ────────────────────────────────────────────────────
+    # The engine.predict method internally validates storm_type and tpeak
+    result = engine.predict(
+        storm_type=storm_type,
+        depth_mm=depth_mm,
+        tpeak=tpeak,
+        n_h=N_H,
+        n_w=N_W,
+        verbose=True,
+    )
+
+    flood_map = result["flood_map"].astype(np.float32)
+    conf_map  = result["conf_map"].astype(np.float32)
+
+    # 3. Spatial Metadata ──────────────────────────────────────────────────────
+    # Ensure these attributes were attached to your engine instance
+    d_transform = getattr(engine, 'dem_transform', None)
+    d_crs = getattr(engine, 'dem_crs', None)
+
+    # Reconstruct the 2D Manila Mask for the GeoTIFF nodata mapping
+    manila_mask = np.zeros(N_H * N_W, dtype=bool)
+    if engine.manila_patch_indices is not None:
+        manila_mask[engine.manila_patch_indices] = True
+    manila_mask_2d = manila_mask.reshape(N_H, N_W)
+
+    # 4. Optional Barangay Rasterization ───────────────────────────────────────
+    barangay_band = None
+    if has_barangay and geojson_path is not None:
+        barangay_band = _load_barangay_band_from_geojson(
+            geojson_path, d_transform, d_crs, N_H, N_W
+        )
+
+    # 5. Save and Visualize ────────────────────────────────────────────────────
+    # Exports the 3-band GeoTIFF with model metadata
+    save_result_as_tif(
+        flood_map=flood_map,
+        conf_map=conf_map,
+        barangay_band=barangay_band,
+        config=result["config"],
+        save_path=tif_path,
+        transform=d_transform,
+        crs=d_crs,
+        mask_2d=manila_mask_2d,
+    )
+
+    # Generates the comparison plots for classes and confidence
+    visualize_result_tif(
+        tif_path=tif_path,
+        save_path=viz_path,
+        figsize=figsize,
+    )
+
+    result.update({"tif_path": tif_path, "viz_path": viz_path})
+    print(f"✓ Results saved to {output_dir}")
+
+    return result
