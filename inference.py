@@ -350,12 +350,15 @@ def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, c
     H, W    = flood_map.shape
     n_bands = 3 if barangay_band is not None else 2
 
-    # Convert to int32 first, then stamp nodata on outside-Manila pixels
+    # Convert to int32 first, then stamp nodata on outside-Manila pixels AND class 0
     b1 = flood_map.astype(np.int32)
     b2 = (conf_map * 1000).astype(np.int32)
     outside = ~mask_2d
     b1[outside] = -1
     b2[outside] = -1
+    
+    # ── EDITED: Set class 0 (No Flood) to -1 (nodata) so it's transparent in QGIS ──
+    b1[b1 == 0] = -1
 
     with rasterio.open(
         save_path, mode='w', driver='GTiff',
@@ -371,7 +374,7 @@ def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, c
                 b3[outside] = -1
             dst.write(b3, 3)
 
-        dst.update_tags(1, description='Flood Hazard Class (0=None 1=Light 2=Moderate 3=Heavy 4=Extreme)')
+        dst.update_tags(1, description='Flood Hazard Class (0=Transparent 1=Light 2=Moderate 3=Heavy 4=Extreme)')
         dst.update_tags(2, description='Confidence x1000 — divide by 1000 for 0.0-1.0')
         if barangay_band is not None:
             dst.update_tags(3, description='Barangay PSGC Code (-1=outside Manila extent)')
@@ -385,7 +388,9 @@ def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, c
     print(f"  ✓ GeoTIFF saved → {save_path}")
 
 def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
-    _flood_cmap = mcolors.ListedColormap([FLOOD_COLORS[i] for i in range(5)])
+    # ── EDITED: Class 0 should be transparent (alpha=0) ──
+    flood_colors_rgba = [(1.0, 1.0, 1.0, 0.0)] + [mcolors.to_rgba(FLOOD_COLORS[i]) for i in range(1, 5)]
+    _flood_cmap = mcolors.ListedColormap(flood_colors_rgba)
     _flood_norm = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], ncolors=5)
     _conf_cmap  = 'RdYlGn'
 
@@ -399,14 +404,18 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
         b2_tag    = src.tags(2)
         b3_tag    = src.tags(3) 
 
-    valid  = band1_raw != int(nodata) if nodata is not None else np.ones_like(band1_raw, dtype=bool)
-    band1  = np.where(valid, band1_raw.astype(float), np.nan)
-    band2  = np.where(valid, band2_raw,                np.nan)
-    band3  = None
-    band3 = np.where(valid, band3_raw.astype(float), np.nan)
+    # ── EDITED: Create separate valid masks for band1/2 and band3 ──
+    # Band 1&2 are masked where they're nodata (including class 0 which we set to -1)
+    valid_band1_2 = band1_raw != int(nodata) if nodata is not None else np.ones_like(band1_raw, dtype=bool)
+    band1  = np.where(valid_band1_2, band1_raw.astype(float), np.nan)
+    band2  = np.where(valid_band1_2, band2_raw,                np.nan)
+    
+    # Band 3 (barangay) only masked where it's actually nodata, NOT where band1 is nodata
+    valid_band3 = band3_raw != int(nodata) if nodata is not None else np.ones_like(band3_raw, dtype=bool)
+    band3 = np.where(valid_band3, band3_raw.astype(float), np.nan)
 
-    # Crop all bands to the bounding box of valid pixels
-    valid_rows, valid_cols = np.where(valid)
+    # Crop all bands to the bounding box of valid pixels (use band1_2 mask for alignment)
+    valid_rows, valid_cols = np.where(valid_band1_2)
     pad = 0
     vr0 = max(int(valid_rows.min()) - pad, 0)
     vr1 = min(int(valid_rows.max()) + pad, band1.shape[0] - 1)
@@ -416,7 +425,8 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
     band2    = band2   [vr0:vr1+1, vc0:vc1+1]
     band3    = band3   [vr0:vr1+1, vc0:vc1+1] 
     band3_raw = band3_raw[vr0:vr1+1, vc0:vc1+1] 
-    valid    = valid   [vr0:vr1+1, vc0:vc1+1]
+    valid_band1_2    = valid_band1_2   [vr0:vr1+1, vc0:vc1+1]
+    valid_band3      = valid_band3     [vr0:vr1+1, vc0:vc1+1]
 
     print(f"\nGeoTIFF: {tif_path}")
     print(f"  Band 1 : {b1_tag.get('description', 'Flood class')}")
@@ -445,7 +455,8 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
                  for i in range(5)],
         loc='lower left', fontsize=7, framealpha=0.85,
         title='Flood Class', title_fontsize=7)
-    total = int(np.sum(valid))
+    # ── EDITED: Use valid_band1_2 for band1 stats (not valid_band3) ──
+    total = int(np.sum(valid_band1_2))
     ax1.text(0.98, 0.98,
              '\n'.join([f"C{i} {FLOOD_LABELS[i]}: {100*np.nansum(band1==i)/total:.1f}%" for i in range(5)]),
              transform=ax1.transAxes, ha='right', va='top', fontsize=6.5,
