@@ -1,17 +1,3 @@
-"""
-rf_training.py
---------------
-K-Fold training, evaluation, and visualisation for the Random Forest
-flood-classification benchmark.
-
-Mirrors xgb/training.py structure exactly so results are directly comparable:
-  - same compute_sample_weights()
-  - same compute_metrics() / print_metrics()
-  - same 2-fold KFold split on patch indices
-  - same checkpoint + log directory layout
-  - same confusion-matrix and feature-importance plots
-"""
-
 import json
 import time
 import pickle
@@ -36,13 +22,6 @@ CLASS_NAMES = ['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme']
 # ── Class / sample weights ────────────────────────────────────────────────────
 
 def compute_sample_weights(y: np.ndarray, cfg: RFConfig) -> np.ndarray:
-    """
-    Compute per-sample weights identical to the XGBoost pipeline so that
-    class imbalance is handled the same way across both benchmarks.
-
-        w_c = (count_c / N) ^ (-weight_power)
-        weights are normalised so mean(w) = 1
-    """
     N, C = len(y), cfg.num_classes
     cw   = np.zeros(C, dtype=np.float64)
     print(f"\nSample weights  (power={cfg.weight_power}):")
@@ -80,8 +59,6 @@ def make_rf_model(cfg: RFConfig) -> RandomForestClassifier:
         verbose               = cfg.verbose,
     )
 
-
-# ── Metrics (identical to XGBoost version) ────────────────────────────────────
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
     m = {
@@ -141,10 +118,7 @@ def train_kfold_rf(
     cfg           : RFConfig,
     feature_names : Optional[List[str]] = None,
 ) -> Tuple[List[Dict], int]:
-    """
-    Run K-Fold cross-validation, save one .pkl checkpoint per fold,
-    and return fold results + index of the best fold by val macro F1.
-    """
+
     ckpt_dir = cfg.output_dir / 'checkpoints'
     log_dir  = cfg.output_dir / 'logs'
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -294,10 +268,6 @@ def plot_feature_importance(
     cfg           : RFConfig,
     top_n         : int = 20,
 ) -> plt.Figure:
-    """
-    Plot MDI (Mean Decrease in Impurity / Gini importance) with std-dev
-    error bars across trees — a feature unique to RF vs XGBoost.
-    """
     log_dir = cfg.output_dir / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
 
