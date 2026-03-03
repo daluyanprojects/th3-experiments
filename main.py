@@ -6,13 +6,10 @@ from rasterio.transform import Affine
 from pathlib import Path
 import geopandas as gpd
 import pandas as pd
+import sys
 
 from config import TrainConfig
-from inference import (
-    InferenceEngine,
-    _load_barangay_band_from_geojson,
-    run_inference
-)
+
 
 def setup_flood_visualization():
     """Setup flood color mapping and legend for visualization"""
@@ -154,16 +151,37 @@ def build_barangay_lookup(geojson_path: str) -> dict:
 # ============================================================================
 
 def run_flood_prediction(
+    user_type: str,
     geojson_path: str,
     spatial_data_path: str,
-    output_dir: str = './input_testing',
-    storm_type: str = 'triangular',
-    depth_mm: float = 50.0,
-    tpeak: float = 0.5
+    output_dir: str,
+    storm_type: str,
+    depth_mm: float,
+    tpeak: float
 ):
+    # Validate user_type
+    if user_type.lower() not in ['pedestrian', 'vehicle']:
+        raise ValueError(f"user_type must be 'pedestrian' or 'vehicle', got '{user_type}'")
+    
+    if user_type.lower() == 'pedestrian':
+        from inference_ped import (
+            InferenceEngine,
+            _load_barangay_band_from_geojson,
+            run_inference
+        )
+        output_dir_param = 'output_ped_dir'
+        data_suffix = '_ped'
+    else:  # vehicle
+        from inference import (
+            InferenceEngine,
+            _load_barangay_band_from_geojson,
+            run_inference
+        )
+        output_dir_param = 'output_dir'
+        data_suffix = ''
     
     print("\n" + "="*60)
-    print(f"Running Flood Prediction")
+    print(f"Running Flood Prediction [{user_type.upper()}]")
     print("="*60)
     
     # Setup configuration and transforms
@@ -187,34 +205,73 @@ def run_flood_prediction(
     
     # Run inference
     print(f"\nPredicting: {storm_type.capitalize()}, {depth_mm} mm, tpeak={tpeak}")
+    
+    # Call run_inference with appropriate parameter name
     results = run_inference(
         engine=engine,
         storm_type=storm_type,
         depth_mm=depth_mm,
         tpeak=tpeak,
-        output_dir=Path(output_dir),
         dem_transform=geotiff_setup['transform'],
         dem_crs=geotiff_setup['crs'],
-        barangay_band=barangay_band
+        barangay_band=barangay_band,
+        **{output_dir_param: Path(output_dir)}
     )
     
     print(f"\n✓ File saved at: {results['tif_path']}")
     return results
 
 
+def select_user_type() -> str:
+    """
+    Prompt user to select between pedestrian and vehicle mode
+    
+    Returns:
+        Either 'pedestrian' or 'vehicle'
+    """
+    print("\n" + "="*60)
+    print("FLOOD PREDICTION TOOL")
+    print("="*60)
+    print("\nSelect analysis type:")
+    print("  1. Pedestrian Vulnerability")
+    print("  2. Vehicle Accessibility")
+    print()
+    
+    while True:
+        choice = input("Enter your choice (1 or 2): ").strip()
+        
+        if choice == '1':
+            return 'pedestrian'
+        elif choice == '2':
+            return 'vehicle'
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
+
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
-
 if __name__ == "__main__":
     
-    # Define file paths
+    # Set user type directly (pedestrian or vehicle)
+    user_type = 'pedestrian'  # Change to 'vehicle' as needed
+    
+    # Define file paths based on user type
     GEOJSON_PATH = 'manila_barangay_geojson.geojson'
-    SPATIAL_DATA_PATH = 'outputs/spatial_data.npz'
-    OUTPUT_DIR = './input_testing'
+    
+    if user_type == 'pedestrian':
+        SPATIAL_DATA_PATH = 'outputs_ped/spatial_data.npz'
+        OUTPUT_DIR = './input_testing'
+    else:  # vehicle
+        SPATIAL_DATA_PATH = 'outputs/spatial_data.npz'
+        OUTPUT_DIR = './input_testing'
+    
+    print(f"\n[{user_type.upper()}] Mode selected")
+    print(f"  Spatial data: {SPATIAL_DATA_PATH}")
+    print(f"  Output dir : {OUTPUT_DIR}")
     
     # Build barangay lookup table
-    print("Building barangay lookup table...")
+    print("\nBuilding barangay lookup table...")
     barangay_lookup = build_barangay_lookup(GEOJSON_PATH)
     
     # Print summary
@@ -223,9 +280,9 @@ if __name__ == "__main__":
     cities = sorted(set(v["city"] for v in barangay_lookup.values()))
     print(f'Cities                 : {cities}')
     
-    # Run flood prediction for a test scenario
-    # Example: Triangular storm, 50mm depth, peak at 0.5
+    # Run flood prediction
     results = run_flood_prediction(
+        user_type=user_type,
         geojson_path=GEOJSON_PATH,
         spatial_data_path=SPATIAL_DATA_PATH,
         output_dir=OUTPUT_DIR,
