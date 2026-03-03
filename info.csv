@@ -1,0 +1,51 @@
+No,Pattern Type,Total storm depth P (mm),Peak time fraction r (tpeak / D)
+1,SCS‑style front‑loaded (convective – similar to NRCS Type II),38,
+2,SCS‑style front‑loaded (convective – similar to NRCS Type II),6,
+3,SCS‑style front‑loaded (convective – similar to NRCS Type II),34,
+4,SCS‑style front‑loaded (convective – similar to NRCS Type II),54,
+5,SCS‑style front‑loaded (convective – similar to NRCS Type II),17,
+6,SCS‑style front‑loaded (convective – similar to NRCS Type II),33,
+7,SCS‑style front‑loaded (convective – similar to NRCS Type II),11,
+8,SCS‑style front‑loaded (convective – similar to NRCS Type II),21,
+9,SCS‑style front‑loaded (convective – similar to NRCS Type II),78,
+10,SCS‑style front‑loaded (convective – similar to NRCS Type II),41,
+11,SCS‑style balanced (intermediate),35,
+12,SCS‑style balanced (intermediate),28,
+13,SCS‑style balanced (intermediate),53,
+14,SCS‑style balanced (intermediate),78,
+15,SCS‑style balanced (intermediate),22,
+16,SCS‑style balanced (intermediate),37,
+17,SCS‑style balanced (intermediate),54,
+18,SCS‑style balanced (intermediate),31,
+19,SCS‑style balanced (intermediate),19,
+20,SCS‑style balanced (intermediate),47,
+21,SCS‑style back‑loaded (frontal – similar to Type I),14,
+22,SCS‑style back‑loaded (frontal – similar to Type I),50,
+23,SCS‑style back‑loaded (frontal – similar to Type I),35,
+24,SCS‑style back‑loaded (frontal – similar to Type I),9,
+25,SCS‑style back‑loaded (frontal – similar to Type I),48,
+26,SCS‑style back‑loaded (frontal – similar to Type I),30,
+27,SCS‑style back‑loaded (frontal – similar to Type I),24,
+28,SCS‑style back‑loaded (frontal – similar to Type I),7,
+29,SCS‑style back‑loaded (frontal – similar to Type I),75,
+30,SCS‑style back‑loaded (frontal – similar to Type I),21,
+31,Triangular / Chicago‑style with peak at fraction of duration,8,0.4
+32,Triangular / Chicago‑style with peak at fraction of duration,45,0.2
+33,Triangular / Chicago‑style with peak at fraction of duration,15,0.1
+34,Triangular / Chicago‑style with peak at fraction of duration,55,0.6
+35,Triangular / Chicago‑style with peak at fraction of duration,18,0.5
+36,Triangular / Chicago‑style with peak at fraction of duration,24,0.8
+37,Triangular / Chicago‑style with peak at fraction of duration,19,0.3
+38,Triangular / Chicago‑style with peak at fraction of duration,11,0.9
+39,Triangular / Chicago‑style with peak at fraction of duration,5,0.3
+40,Triangular / Chicago‑style with peak at fraction of duration,20,0.4
+41,Triangular / Chicago‑style with peak at fraction of duration,50,0.5
+42,Triangular / Chicago‑style with peak at fraction of duration,77,0.6
+43,Triangular / Chicago‑style with peak at fraction of duration,31,0.2
+44,Triangular / Chicago‑style with peak at fraction of duration,12,0.7
+45,Triangular / Chicago‑style with peak at fraction of duration,49,0.8
+46,Triangular / Chicago‑style with peak at fraction of duration,60,0.2
+47,Triangular / Chicago‑style with peak at fraction of duration,40,0.6
+48,Triangular / Chicago‑style with peak at fraction of duration,39,0.5
+49,Triangular / Chicago‑style with peak at fraction of duration,7,0.4
+50,Triangular / Chicago‑style with peak at fraction of duration,15,0.1
