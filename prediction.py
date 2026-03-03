@@ -101,8 +101,9 @@ def generate_prediction_maps(
     cfg:           TrainConfig,
     spatial_shape: Tuple[int, int] = SPATIAL_SHAPE,
     patch_size:    int = PATCH_SIZE,
+    output_dir : Path = None
 ) -> Dict:
-    output_dir = Path(cfg.output_dir) / 'predictions'
+    output_dir = output_dir # Path(cfg.output_dir) / 'predictions'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 60)

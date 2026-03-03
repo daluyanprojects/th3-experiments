@@ -8,7 +8,7 @@ from matplotlib.colors import ListedColormap
 
 def categorize_flood_maps(
     train_flood_maps: List[np.ndarray], test_flood_maps: List[np.ndarray], train_mask: np.ndarray, test_mask: np.ndarray,
-    patch_size: int = 16, categorization_method: str = 'majority_vote', class_thresholds: List[float] = [0.15, 0.24, 0.46, 0.68]) -> Dict:
+    patch_size: int = 16, categorization_method: str = 'majority_vote', class_thresholds: Optional[List[float]] = None ) -> Dict:
     
     print("\n" + "="*70)
     print("PHASE 4: FLOOD MAP CATEGORIZATION")

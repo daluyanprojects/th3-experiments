@@ -39,6 +39,7 @@ class TrainConfig:
     
     # Output
     output_dir:         Path = Path('./outputs')
+    output_ped_dir:     Path = Path('./outputs_ped')
 
     def save(self, path):
         with open(path, 'w') as f:

@@ -268,9 +268,12 @@ def train_kfold(
     full_dataset: FloodPatchDataset,
     y_train: np.ndarray,
     cfg: TrainConfig,
+    ckpt_dir: str | Path,
+    log_dir: str | Path
 ) -> Tuple[List[Dict], int]:
-    ckpt_dir = cfg.output_dir / 'checkpoints'
-    log_dir  = cfg.output_dir / 'logs'
+    ckpt_dir = Path(ckpt_dir)
+    log_dir = Path(log_dir)
+
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -362,8 +365,14 @@ def train_kfold(
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, test_loader: DataLoader, cfg: TrainConfig, split_name: str = 'Test') -> Dict:
-    log_dir = cfg.output_dir / 'logs'
+def evaluate(
+    model: nn.Module, 
+    test_loader: DataLoader, 
+    cfg: TrainConfig, 
+    split_name: str = 'Test', 
+    log_dir: str | Path = None
+) -> Dict:
+    log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     model.eval()
     preds, trues, probs_list = [], [], []
