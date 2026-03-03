@@ -221,40 +221,13 @@ def run_flood_prediction(
     print(f"\n✓ File saved at: {results['tif_path']}")
     return results
 
-
-def select_user_type() -> str:
-    """
-    Prompt user to select between pedestrian and vehicle mode
-    
-    Returns:
-        Either 'pedestrian' or 'vehicle'
-    """
-    print("\n" + "="*60)
-    print("FLOOD PREDICTION TOOL")
-    print("="*60)
-    print("\nSelect analysis type:")
-    print("  1. Pedestrian Vulnerability")
-    print("  2. Vehicle Accessibility")
-    print()
-    
-    while True:
-        choice = input("Enter your choice (1 or 2): ").strip()
-        
-        if choice == '1':
-            return 'pedestrian'
-        elif choice == '2':
-            return 'vehicle'
-        else:
-            print("Invalid choice. Please enter 1 or 2.")
-
-
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 if __name__ == "__main__":
     
     # Set user type directly (pedestrian or vehicle)
-    user_type = 'pedestrian'  # Change to 'vehicle' as needed
+    user_type = 'vehicle'  # Change to 'pedestrian' as needed
     
     # Define file paths based on user type
     GEOJSON_PATH = 'manila_barangay_geojson.geojson'
