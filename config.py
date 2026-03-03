@@ -86,8 +86,8 @@ class DatasetConfig:
 @dataclass
 class TrainConfig:
     batch_size:          int   = 1024
-    num_epochs:          int   = 20
-    num_folds:           int   = 2
+    num_epochs:          int   = 50
+    num_folds:           int   = 3
     lr:                  float = 1e-4
     weight_decay:        float = 0.05
     betas:               tuple = (0.9, 0.999)
