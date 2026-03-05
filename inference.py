@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import warnings
 from typing import Optional, Dict, List, Tuple
+from rasterio.warp import reproject, Resampling
 
 from hyetograph import build_inference_inputs
 from config import TrainConfig
@@ -315,7 +316,70 @@ def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W)
     return band
 
 
-def save_prediction_tiff(result, engine, dem_crs, dem_transform, _barangay_band, save_path: str):
+def _apply_mask_to_maps(
+    flood_map: np.ndarray,
+    conf_map: np.ndarray,
+    barangay_map: np.ndarray,
+    mask_tif_path: str | Path,
+    dem_transform,
+    dem_crs,
+    map_shape: tuple = MAP_SHAPE,
+    verbose: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    
+    # Load mask GeoTIFF
+    with rasterio.open(mask_tif_path) as mask_src:
+        mask_crs = mask_src.crs
+        mask_transform = mask_src.transform
+        mask_shape = mask_src.shape
+        mask_raw = mask_src.read(1)
+    
+    # Check if reprojection/resampling needed
+    if dem_crs != mask_crs or mask_shape != map_shape:
+        if verbose:
+            print(f"  ⚠ Mask alignment: CRS={dem_crs != mask_crs}, Shape={mask_shape != map_shape}")
+            print(f"    → Reprojecting mask to match prediction...")
+        
+        # Reproject mask to prediction CRS and shape
+        mask_aligned = np.zeros(map_shape, dtype=mask_raw.dtype)
+        reproject(
+            mask_raw,
+            mask_aligned,
+            src_transform=mask_transform,
+            src_crs=mask_crs,
+            dst_transform=dem_transform,
+            dst_crs=dem_crs,
+            resampling=Resampling.nearest,
+        )
+    else:
+        mask_aligned = mask_raw
+        if verbose:
+            print(f"  ✓ Mask perfectly aligned (same CRS and shape)")
+    
+    # Apply mask: pixels outside mask (value=0) → set to -1 (nodata)
+    mask_binary = (mask_aligned > 0).astype(np.uint8)
+    outside_mask = mask_binary == 0
+    
+    flood_map_masked = flood_map.copy()
+    conf_map_masked = conf_map.copy()
+    barangay_map_masked = barangay_map.copy()
+    
+    flood_map_masked[outside_mask] = -1
+    conf_map_masked[outside_mask] = -1
+    barangay_map_masked[outside_mask] = -1
+    
+    if verbose:
+        n_inside = (mask_binary > 0).sum()
+        n_total = mask_binary.size
+        print(f"  Mask applied: {n_inside:,} / {n_total:,} pixels inside")
+    
+    return flood_map_masked, conf_map_masked, barangay_map_masked
+
+
+
+
+
+def save_prediction_tiff(result, engine, dem_crs, dem_transform, _barangay_band, save_path: str, mask_tif_path: Optional[str | Path] = None):
     flood_map = result['flood_map'].astype(np.int32)  # Band 1
 
     invalid_mask = (flood_map == -1)
@@ -331,6 +395,15 @@ def save_prediction_tiff(result, engine, dem_crs, dem_transform, _barangay_band,
 
     bar_map = _barangay_band.astype(np.int32).copy()
     bar_map[invalid_mask] = -1  
+
+     # ── Apply mask if provided ────────────────────────────────────────────────
+    if mask_tif_path is not None:
+        print(f"  Applying mask from {Path(mask_tif_path).name}...")
+        flood_map, conf_map, bar_map = _apply_mask_to_maps(
+            flood_map, conf_map, bar_map,
+            mask_tif_path, dem_transform, dem_crs,
+            verbose=True
+        )
 
     with rasterio.open(
         save_path, 'w', driver='GTiff', height=MAP_SHAPE[0], width=MAP_SHAPE[1],
@@ -402,11 +475,12 @@ def visualize_prediction_tiff(tiff_path: str, title: str = None, figsize=(15, 4)
 
     plt.tight_layout()
     return fig
-def run_inference(engine: InferenceEngine, storm_type: str, depth_mm: float, output_dir: str | Path, dem_transform, dem_crs, tpeak: float, barangay_band=None):
+
+def run_inference(engine: InferenceEngine, storm_type: str, depth_mm: float, output_dir: str | Path, dem_transform, dem_crs, tpeak: float, barangay_band=None, mask_tif_path: Optional[str | Path] = None):
     res = predict_with_confidence(engine, storm_type, depth_mm, tpeak)
     tp_str = str(tpeak).replace('.', '')
     out_path = Path(output_dir) / f"{storm_type}_{int(depth_mm)}mm_tp{tp_str}.tif"
-    save_prediction_tiff(res, engine, dem_crs, dem_transform, barangay_band, str(out_path))
+    save_prediction_tiff(res, engine, dem_crs, dem_transform, barangay_band, str(out_path), mask_tif_path=mask_tif_path)
     visualize_prediction_tiff(str(out_path), title=res['storm_label'])
     plt.show()
     
