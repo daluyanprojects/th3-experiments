@@ -477,6 +477,8 @@ def run_inference(engine: InferenceEngine, storm_type: str, depth_mm: float, out
     res = predict_with_confidence(engine, storm_type, depth_mm, tpeak)
     tp_str = str(tpeak).replace('.', '')
     out_path = Path(output_ped_dir) / f"{storm_type}_{int(depth_mm)}mm_tp{tp_str}.tif"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  Output directory: {out_path.parent}")
     save_prediction_tiff(res, engine, dem_crs, dem_transform, barangay_band, str(out_path), mask_tif_path=mask_tif_path)
     visualize_prediction_tiff(str(out_path), title=res['storm_label'])
     plt.show()
