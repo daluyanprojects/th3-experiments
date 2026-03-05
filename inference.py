@@ -10,10 +10,10 @@ from rasterio.features import rasterize
 from shapely.geometry import box
 import matplotlib.pyplot as plt
 from pathlib import Path
-from hyetograph import build_conditioning_vector as hyeto_build_conditioning
+from rasterio.warp import reproject, Resampling
 import warnings
-import rasterio.crs
-from pathlib import Path
+
+from hyetograph import build_conditioning_vector as hyeto_build_conditioning
 
 # ── Visual setup ──────────────────────────────────────────────────────────────
 FLOOD_COLORS = {
@@ -125,7 +125,6 @@ class FloodInferenceEngine:
             print(f"  Manila indices : {len(manila_patch_indices):,} patches indexed")
         print(f"{'='*60}\n")
 
-    # ── Public API ────────────────────────────────────────────────────────────
 
     @torch.no_grad()
     def predict(
@@ -281,7 +280,6 @@ class FloodInferenceEngine:
         return results
 
     # ── Private helpers ───────────────────────────────────────────────────────
-
     def _compute_statistics(self, patch_predictions: np.ndarray) -> Dict:
         total = patch_predictions.size
         stats = {}
@@ -302,7 +300,6 @@ class FloodInferenceEngine:
         stats:             Dict,
         patch_confidences: Optional[np.ndarray] = None,
     ) -> None:
-        """Pretty-print prediction summary."""
         print(f"\n{'='*60}")
         print(f"PREDICTION SUMMARY")
         print(f"{'='*60}")
@@ -346,18 +343,92 @@ def compute_class_pcts(flood_map):
     total = flood_map.size
     return {i: 100 * (flood_map == i).sum() / total for i in range(5)}
 
-def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, crs=None, barangay_band=None, mask_2d=None):
-    H, W    = flood_map.shape
-    n_bands = 3 if barangay_band is not None else 2
+def _apply_mask_to_maps(
+    flood_map: np.ndarray,
+    conf_map: np.ndarray,
+    barangay_map: np.ndarray,
+    mask_tif_path: str | Path,
+    dem_transform,
+    dem_crs,
+    verbose: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    map_shape = flood_map.shape
+    
+    # Load mask GeoTIFF
+    with rasterio.open(mask_tif_path) as mask_src:
+        mask_crs = mask_src.crs
+        mask_transform = mask_src.transform
+        mask_shape = mask_src.shape
+        mask_raw = mask_src.read(1)
+    
+    # Check if reprojection/resampling needed
+    if dem_crs != mask_crs or mask_shape != map_shape:
+        if verbose:
+            print(f"  ⚠ Mask alignment: CRS={dem_crs != mask_crs}, Shape={mask_shape != map_shape}")
+            print(f"    → Reprojecting mask to match prediction...")
+        
+        # Reproject mask to prediction CRS and shape
+        mask_aligned = np.zeros(map_shape, dtype=mask_raw.dtype)
+        reproject(
+            mask_raw,
+            mask_aligned,
+            src_transform=mask_transform,
+            src_crs=mask_crs,
+            dst_transform=dem_transform,
+            dst_crs=dem_crs,
+            resampling=Resampling.nearest,
+        )
+    else:
+        mask_aligned = mask_raw
+        if verbose:
+            print(f"  ✓ Mask perfectly aligned (same CRS and shape)")
+    
+    # Apply mask: pixels outside mask (value=0) → set to -1 (nodata)
+    mask_binary = (mask_aligned > 0).astype(np.uint8)
+    outside_mask = mask_binary == 0
+    
+    flood_map_masked = flood_map.copy()
+    conf_map_masked = conf_map.copy()
+    barangay_map_masked = barangay_map.copy()
+    
+    flood_map_masked[outside_mask] = -1
+    conf_map_masked[outside_mask] = -1
+    barangay_map_masked[outside_mask] = -1
+    
+    if verbose:
+        n_inside = (mask_binary > 0).sum()
+        n_total = mask_binary.size
+        print(f"  Mask applied: {n_inside:,} / {n_total:,} pixels inside")
+    
+    return flood_map_masked, conf_map_masked, barangay_map_masked
 
-    # Convert to int32 first, then stamp nodata on outside-Manila pixels AND class 0
+def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, crs=None, barangay_band=None, mask_2d=None, mask_tif_path: Optional[str | Path] = None):
+    H, W    = flood_map.shape
+    n_bands = 3
+
+    if mask_tif_path is not None:
+        print(f"  Applying mask from {Path(mask_tif_path).name}...")
+        flood_map, conf_map, barangay_band_temp = _apply_mask_to_maps(
+            flood_map.copy(), 
+            conf_map.copy(), 
+            barangay_band if barangay_band is not None else np.zeros((H, W), dtype=np.int32),
+            mask_tif_path, 
+            transform, 
+            crs,
+            verbose=True
+        )
+        if barangay_band is not None:
+            barangay_band = barangay_band_temp
+
+    # Create band variables from masked (or original) data
     b1 = flood_map.astype(np.int32)
     b2 = (conf_map * 1000).astype(np.int32)
+    
+    # Also apply Manila mask_2d if provided
     outside = ~mask_2d
     b1[outside] = -1
     b2[outside] = -1
     
-    # ── EDITED: Set class 0 (No Flood) to -1 (nodata) so it's transparent in QGIS ──
     b1[b1 == 0] = -1
 
     with rasterio.open(
@@ -368,11 +439,10 @@ def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, c
     ) as dst:
         dst.write(b1, 1)
         dst.write(b2, 2)
-        if barangay_band is not None:
-            b3 = barangay_band.astype(np.int32)
-            if mask_2d is not None:
-                b3[outside] = -1
-            dst.write(b3, 3)
+        b3 = barangay_band.astype(np.int32)
+        outside = ~mask_2d
+        b3[outside] = -1
+        dst.write(b3, 3)
 
         dst.update_tags(1, description='Flood Hazard Class (0=Transparent 1=Light 2=Moderate 3=Heavy 4=Extreme)')
         dst.update_tags(2, description='Confidence x1000 — divide by 1000 for 0.0-1.0')
@@ -388,7 +458,6 @@ def save_result_as_tif(flood_map, conf_map, config, save_path, transform=None, c
     print(f"  ✓ GeoTIFF saved → {save_path}")
 
 def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
-    # ── EDITED: Class 0 should be transparent (alpha=0) ──
     flood_colors_rgba = [(1.0, 1.0, 1.0, 0.0)] + [mcolors.to_rgba(FLOOD_COLORS[i]) for i in range(1, 5)]
     _flood_cmap = mcolors.ListedColormap(flood_colors_rgba)
     _flood_norm = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], ncolors=5)
@@ -404,17 +473,13 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
         b2_tag    = src.tags(2)
         b3_tag    = src.tags(3) 
 
-    # ── EDITED: Create separate valid masks for band1/2 and band3 ──
-    # Band 1&2 are masked where they're nodata (including class 0 which we set to -1)
     valid_band1_2 = band1_raw != int(nodata) if nodata is not None else np.ones_like(band1_raw, dtype=bool)
     band1  = np.where(valid_band1_2, band1_raw.astype(float), np.nan)
     band2  = np.where(valid_band1_2, band2_raw,                np.nan)
     
-    # Band 3 (barangay) only masked where it's actually nodata, NOT where band1 is nodata
     valid_band3 = band3_raw != int(nodata) if nodata is not None else np.ones_like(band3_raw, dtype=bool)
     band3 = np.where(valid_band3, band3_raw.astype(float), np.nan)
 
-    # Crop all bands to the bounding box of valid pixels (use band1_2 mask for alignment)
     valid_rows, valid_cols = np.where(valid_band1_2)
     pad = 0
     vr0 = max(int(valid_rows.min()) - pad, 0)
@@ -431,11 +496,10 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
     print(f"\nGeoTIFF: {tif_path}")
     print(f"  Band 1 : {b1_tag.get('description', 'Flood class')}")
     print(f"  Band 2 : {b2_tag.get('description', 'Confidence')}")
-    if band3 is not None:
-        print(f"  Band 3 : {b3_tag.get('description', 'Barangay PSGC Code')}")
+    print(f"  Band 3 : {b3_tag.get('description', 'Barangay PSGC Code')}")
     print(f"  Storm  : {tags.get('storm_type','?')}  {tags.get('depth_mm','?')}mm  tpeak={tags.get('tpeak','?')}")
 
-    n_cols = 3 if band3 is not None else 2
+    n_cols = 3
     fig, axes = plt.subplots(1, n_cols, figsize=figsize)
 
     # ── Band 1: Flood class ───────────────────────────────────────────────────
@@ -738,6 +802,7 @@ def run_inference(
     geojson_path: Optional[str] = None,
     stem: Optional[str] = None,
     figsize: tuple = (21, 6),
+    mask_tif_path: Optional[str | Path] = None,
 ) -> Dict:
 
     output_dir = Path(output_dir)
@@ -796,6 +861,7 @@ def run_inference(
         transform=d_transform,
         crs=d_crs,
         mask_2d=manila_mask_2d,
+        mask_tif_path=mask_tif_path,
     )
 
     # Generates the comparison plots for classes and confidence

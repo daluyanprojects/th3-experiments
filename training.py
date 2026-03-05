@@ -7,6 +7,8 @@ from sklearn.metrics import f1_score as sk_f1
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 import copy
+from pathlib import Path
+
 from config import TrainConfig
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -83,7 +85,10 @@ def train_kfold(
     y_train:      np.ndarray,
     cfg:          TrainConfig,
     device:       torch.device = torch.device('cpu'),
+    checkpoint_dir: Path = None
 ) -> Tuple[List[Dict], int]:
+    
+    checkpoint_dir = Path(checkpoint_dir)
 
     N_patches   = full_dataset.N_patches
     N_scenarios = full_dataset.N_scenarios
@@ -150,7 +155,7 @@ def train_kfold(
                 print(f"  → Best Macro F1: {best_f1_fold:.4f}")
 
         # Save checkpoint
-        save_dir = cfg.output_dir / f'fold_{fold+1}'
+        save_dir = checkpoint_dir / f'fold_{fold+1}'
         save_dir.mkdir(parents=True, exist_ok=True)
         torch.save({
             'model_state_dict': best_state,

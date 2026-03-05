@@ -21,15 +21,16 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     batch_size:       int   = 256
-    num_epochs:       int   = 50
-    num_folds:        int   = 3
+    num_epochs:       int   = 1
+    num_folds:        int   = 2
     lr:               float = 3e-4
     weight_decay:     float = 1e-4
     num_classes:      int   = 5
     betas:            tuple = (0.9, 0.999)
     warmup_epochs:    int   = 10
-    min_lr:              float = 1e-6
+    min_lr:           float = 1e-6
     output_dir:       Path  = Path('./checkpoints')
+    output_ped_dir:   Path  = Path('./checkpoints_ped')
 
     def save(self, path: Path):
         path = Path(path)
@@ -37,6 +38,7 @@ class TrainConfig:
         with open(path, 'w') as f:
             d = asdict(self)
             d['output_dir'] = str(self.output_dir)
+            d['output_ped_dir'] = str(self.output_ped_dir) 
             json.dump(d, f, indent=2)
 
     @classmethod
@@ -44,6 +46,8 @@ class TrainConfig:
         with open(path) as f:
             d = json.load(f)
         d['output_dir'] = Path(d['output_dir'])
+        d['output_ped_dir'] = Path(d['output_ped_dir']) 
+        d['betas'] = tuple(d['betas'])
         return cls(**d)
 
 @dataclass
@@ -57,6 +61,23 @@ class Config:
         with open(path, 'w') as f:
             d = {
                 'model': asdict(self.model),
-                'train': {**asdict(self.train), 'output_dir': str(self.train.output_dir)},
+                'train': {
+                    **asdict(self.train), 
+                    'output_dir': str(self.train.output_dir),
+                    'output_ped_dir': str(self.train.output_ped_dir), 
+                },
             }
             json.dump(d, f, indent=2)
+
+    @classmethod
+    def load(cls, path: Path):
+        with open(path) as f:
+            d = json.load(f)
+        # Convert string paths back to Path objects
+        d['train']['output_dir'] = Path(d['train']['output_dir'])
+        d['train']['output_ped_dir'] = Path(d['train']['output_ped_dir'])  
+        d['train']['betas'] = tuple(d['train']['betas'])
+        return cls(
+            model=ModelConfig(**d['model']),
+            train=TrainConfig(**d['train'])
+        )

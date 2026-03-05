@@ -27,6 +27,7 @@
     ],
     "warmup_epochs": 10,
     "min_lr": 1e-06,
-    "output_dir": "checkpoints"
+    "output_dir": "checkpoints",
+    "output_ped_dir": "checkpoints_ped"
   }
 }
