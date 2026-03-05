@@ -15,6 +15,40 @@ class ModelConfig:
     learnable_pos_enc: bool  = True
     rainfall_hidden:   int   = 128
 
+# ── Training ──────────────────────────────────────────────────────────────────
+@dataclass
+class TrainConfig:
+    batch_size:          int   = 1024
+    num_epochs:          int   = 5
+    num_folds:           int   = 3
+    lr:                  float = 1e-4
+    weight_decay:        float = 0.05
+    betas:               tuple = (0.9, 0.999)
+    warmup_epochs:       int   = 10
+    min_lr:              float = 1e-6
+    grad_clip_norm:      float = 1.0
+    early_stop_patience: int   = 10
+    checkpoint_metric:   str   = 'macro_f1'
+    output_dir:          Path  = Path('./checkpoints')
+    output_ped_dir:      Path  = Path('./checkpoints_ped')
+    
+    def save(self, path: Path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w') as f:
+            d = asdict(self)
+            d['output_dir'] = str(self.output_dir)
+            d['output_ped_dir'] = str(self.output_ped_dir)
+            json.dump(d, f, indent=2)
+    
+    @classmethod
+    def load(cls, path: Path):
+        with open(path) as f:
+            d = json.load(f)
+        d['output_dir'] = Path(d['output_dir'])
+        d['output_ped_dir'] = Path(d['output_ped_dir'])
+        d['betas']      = tuple(d['betas'])
+        return cls(**d)
 
 # ── Dataset info ──────────────────────────────────────────────────────────────
 @dataclass
@@ -36,12 +70,11 @@ class DatasetConfig:
     rain_min:             float = 0.0                                              
     rain_max:             float = 189.8531                                        
     channel_breakdown:    Dict = field(default_factory=dict)
-
+    
     def populate(self, spatial_patches, train_dataset, test_dataset,
                  train_data, drainage_resized, soil_resized,
                  rain_min: float, rain_max: float,                  
                  drain_channels: list, soil_channels: list):        
-
         self.patch_size           = spatial_patches.shape[-1]
         self.input_channels       = spatial_patches.shape[1]
         self.training_samples     = train_dataset['total_samples']
@@ -49,17 +82,14 @@ class DatasetConfig:
         self.num_train_scenarios  = train_dataset['num_scenarios']
         self.num_test_scenarios   = test_dataset['num_scenarios']
         self.patches_per_scenario = train_dataset['patches_per_scenario']
-
         rain_and_type_dim     = train_dataset['rain_and_type'].shape[-1]
         self.conditioning_dim = rain_and_type_dim + self.num_channel_flags + 2 
         
         self.rainfall_timesteps   = self.conditioning_dim - self.num_storm_types - self.num_channel_flags
-
         self.drain_channels       = drain_channels   
         self.soil_channels        = soil_channels     
         self.rain_min             = rain_min        
         self.rain_max             = rain_max         
-
         self.channel_breakdown    = {
             'dem':          1,
             'infiltration': 1,
@@ -68,7 +98,7 @@ class DatasetConfig:
             'soil':         len(soil_resized),
         }
         self._print()
-
+    
     def _print(self):
         print("\nDatasetConfig populated:")
         print("-" * 70)
@@ -82,52 +112,39 @@ class DatasetConfig:
         print(f"  drain_channels={self.drain_channels}")
         print(f"  soil_channels={self.soil_channels}")
 
-# ── Training ──────────────────────────────────────────────────────────────────
-@dataclass
-class TrainConfig:
-    batch_size:          int   = 1024
-    num_epochs:          int   = 50
-    num_folds:           int   = 3
-    lr:                  float = 1e-4
-    weight_decay:        float = 0.05
-    betas:               tuple = (0.9, 0.999)
-    warmup_epochs:       int   = 10
-    min_lr:              float = 1e-6
-    grad_clip_norm:      float = 1.0
-    early_stop_patience: int   = 10
-    checkpoint_metric:   str   = 'macro_f1'
-    output_dir:          Path  = Path('./checkpoints')
-
-    def save(self, path: Path):
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w') as f:
-            d = asdict(self)
-            d['output_dir'] = str(self.output_dir)
-            json.dump(d, f, indent=2)
-
-    @classmethod
-    def load(cls, path: Path):
-        with open(path) as f:
-            d = json.load(f)
-        d['output_dir'] = Path(d['output_dir'])
-        d['betas']      = tuple(d['betas'])
-        return cls(**d)
-
-
 @dataclass
 class Config:
     data:  DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig   = field(default_factory=ModelConfig)
     train: TrainConfig   = field(default_factory=TrainConfig)
-
+    
     def save(self, path: Path):
+        """Save config to JSON, converting Path objects to strings"""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         d = {
             'data':  asdict(self.data),
             'model': asdict(self.model),
-            'train': {**asdict(self.train), 'output_dir': str(self.train.output_dir)},
+            'train': {
+                **asdict(self.train), 
+                'output_dir': str(self.train.output_dir),
+                'output_ped_dir': str(self.train.output_ped_dir),
+            },
         }
         with open(path, 'w') as f:
             json.dump(d, f, indent=2)
+    
+    @classmethod
+    def load(cls, path: Path):
+        """Load config from JSON, converting string paths back to Path objects"""
+        with open(path) as f:
+            d = json.load(f)
+        # Convert string paths back to Path objects
+        d['train']['output_dir'] = Path(d['train']['output_dir'])
+        d['train']['output_ped_dir'] = Path(d['train']['output_ped_dir'])
+        d['train']['betas'] = tuple(d['train']['betas'])
+        return cls(
+            data=DatasetConfig(**d['data']),
+            model=ModelConfig(**d['model']),
+            train=TrainConfig(**d['train'])
+        )

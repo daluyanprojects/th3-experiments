@@ -507,66 +507,6 @@ def visualize_result_tif(tif_path: str, save_path: str = None, figsize: tuple = 
 
     plt.show()
 
-def _apply_mask_to_maps(
-    flood_map: np.ndarray,
-    conf_map: np.ndarray,
-    barangay_map: np.ndarray,
-    mask_tif_path: str | Path,
-    dem_transform,
-    dem_crs,
-    verbose: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    
-    map_shape = flood_map.shape
-    
-    # Load mask GeoTIFF
-    with rasterio.open(mask_tif_path) as mask_src:
-        mask_crs = mask_src.crs
-        mask_transform = mask_src.transform
-        mask_shape = mask_src.shape
-        mask_raw = mask_src.read(1)
-    
-    # Check if reprojection/resampling needed
-    if dem_crs != mask_crs or mask_shape != map_shape:
-        if verbose:
-            print(f"  ⚠ Mask alignment: CRS={dem_crs != mask_crs}, Shape={mask_shape != map_shape}")
-            print(f"    → Reprojecting mask to match prediction...")
-        
-        # Reproject mask to prediction CRS and shape
-        mask_aligned = np.zeros(map_shape, dtype=mask_raw.dtype)
-        reproject(
-            mask_raw,
-            mask_aligned,
-            src_transform=mask_transform,
-            src_crs=mask_crs,
-            dst_transform=dem_transform,
-            dst_crs=dem_crs,
-            resampling=Resampling.nearest,
-        )
-    else:
-        mask_aligned = mask_raw
-        if verbose:
-            print(f"  ✓ Mask perfectly aligned (same CRS and shape)")
-    
-    # Apply mask: pixels outside mask (value=0) → set to -1 (nodata)
-    mask_binary = (mask_aligned > 0).astype(np.uint8)
-    outside_mask = mask_binary == 0
-    
-    flood_map_masked = flood_map.copy()
-    conf_map_masked = conf_map.copy()
-    barangay_map_masked = barangay_map.copy()
-    
-    flood_map_masked[outside_mask] = -1
-    conf_map_masked[outside_mask] = -1
-    barangay_map_masked[outside_mask] = -1
-    
-    if verbose:
-        n_inside = (mask_binary > 0).sum()
-        n_total = mask_binary.size
-        print(f"  Mask applied: {n_inside:,} / {n_total:,} pixels inside")
-    
-    return flood_map_masked, conf_map_masked, barangay_map_masked
-
 def save_result_as_tif(result, save_path, transform, crs, map_size=320, barangay_band=None, mask_tif_path: Optional[str | Path] = None):
     flood_map = result['flood_map'].astype(np.int32)
     H, W      = flood_map.shape  
@@ -684,6 +624,68 @@ def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W)
     return band
 
 
+def _apply_mask_to_maps(
+    flood_map: np.ndarray,
+    conf_map: np.ndarray,
+    barangay_map: np.ndarray,
+    mask_tif_path: str | Path,
+    dem_transform,
+    dem_crs,
+    verbose: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    
+    map_shape = flood_map.shape
+    
+    # Load mask GeoTIFF
+    with rasterio.open(mask_tif_path) as mask_src:
+        mask_crs = mask_src.crs
+        mask_transform = mask_src.transform
+        mask_shape = mask_src.shape
+        mask_raw = mask_src.read(1)
+    
+    # Check if reprojection/resampling needed
+    if dem_crs != mask_crs or mask_shape != map_shape:
+        if verbose:
+            print(f"  ⚠ Mask alignment: CRS={dem_crs != mask_crs}, Shape={mask_shape != map_shape}")
+            print(f"    → Reprojecting mask to match prediction...")
+        
+        # Reproject mask to prediction CRS and shape
+        mask_aligned = np.zeros(map_shape, dtype=mask_raw.dtype)
+        reproject(
+            mask_raw,
+            mask_aligned,
+            src_transform=mask_transform,
+            src_crs=mask_crs,
+            dst_transform=dem_transform,
+            dst_crs=dem_crs,
+            resampling=Resampling.nearest,
+        )
+    else:
+        mask_aligned = mask_raw
+        if verbose:
+            print(f"  ✓ Mask perfectly aligned (same CRS and shape)")
+    
+    # Apply mask: pixels outside mask (value=0) → set to -1 (nodata)
+    mask_binary = (mask_aligned > 0).astype(np.uint8)
+    outside_mask = mask_binary == 0
+    
+    flood_map_masked = flood_map.copy()
+    conf_map_masked = conf_map.copy()
+    barangay_map_masked = barangay_map.copy()
+    
+    flood_map_masked[outside_mask] = -1
+    conf_map_masked[outside_mask] = -1
+    barangay_map_masked[outside_mask] = -1
+    
+    if verbose:
+        n_inside = (mask_binary > 0).sum()
+        n_total = mask_binary.size
+        print(f"  Mask applied: {n_inside:,} / {n_total:,} pixels inside")
+    
+    return flood_map_masked, conf_map_masked, barangay_map_masked
+
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ABLATION STUDY — 4-pass per storm type
 # ══════════════════════════════════════════════════════════════════════════════
@@ -768,7 +770,7 @@ def plot_4pass_flood(storm_label: str, all_results: dict, cfg, save_name: str) -
     fig.suptitle(
         f'EXP-DES-2 — 4-Pass Ablation | {storm_label}\nManila Core',
         fontsize=12, fontweight='bold', y=1.01)
-    path = str(cfg.train.output_dir / save_name)
+    path = str(cfg.train.output_ped_dir / save_name)
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     print(f'✓ Saved → {path}')
 
@@ -840,7 +842,7 @@ def plot_4pass_confidence(storm_label: str, all_results: dict, cfg, save_name: s
     fig.suptitle(
         f'EXP-DES-2 — Confidence Maps | {storm_label}\nManila Core',
         fontsize=12, fontweight='bold', y=1.01)
-    path = str(cfg.train.output_dir / save_name)
+    path = str(cfg.train.output_ped_dir / save_name)
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     print(f'✓ Saved → {path}')
 

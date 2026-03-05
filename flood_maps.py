@@ -1,39 +1,11 @@
 import numpy as np
-from typing import Tuple, Dict, List, Optional
+from typing import Tuple, Dict, List, Optional, Any
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import matplotlib.patches as mpatches
 
-FLOOD_CLASSES = {
-    0: {
-        'name': 'No Flood',
-        'range': (0.0, 0.15),
-        'color': '#FFFFFF'  # White
-    },
-    1: {
-        'name': 'Light',
-        'range': (0.15, 0.24),
-        'color': '#C6DBEF'  # Light blue
-    },
-    2: {
-        'name': 'Moderate',
-        'range': (0.24, 0.46),
-        'color': '#6BAED6'  # Medium blue
-    },
-    3: {
-        'name': 'Heavy',
-        'range': (0.46, 0.68),
-        'color': '#2171B5'  # Deep blue
-    },
-    4: {
-        'name': 'Extreme',
-        'range': (0.68, float('inf')),
-        'color': '#08306B'  # Dark navy
-    }
-}
-
-def categorize_flood_map(flood_map: np.ndarray, class_ranges: Optional[Dict] = None) -> np.ndarray:
+def categorize_flood_map(flood_map: np.ndarray, class_ranges: Optional[Dict] = None, FLOOD_CLASSES: Dict[int, Dict[str, Any]] = None) -> np.ndarray:
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
     
@@ -56,10 +28,7 @@ def categorize_flood_map(flood_map: np.ndarray, class_ranges: Optional[Dict] = N
     
     return categorized
 
-def categorize_all_flood_maps(flood_maps: List[np.ndarray], class_ranges: Optional[Dict] = None, verbose: bool = True) -> List[np.ndarray]:
-    if class_ranges is None:
-        class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
-    
+def categorize_all_flood_maps(flood_maps: List[np.ndarray], FLOOD_CLASSES: Dict[int, Dict[str, Any]], class_ranges: Optional[Dict] = None, verbose: bool = True) -> List[np.ndarray]:
     categorized_maps = []
     
     if verbose:
@@ -74,7 +43,7 @@ def categorize_all_flood_maps(flood_maps: List[np.ndarray], class_ranges: Option
         print()
     
     for idx, flood_map in enumerate(flood_maps):
-        categorized = categorize_flood_map(flood_map, class_ranges)
+        categorized = categorize_flood_map(flood_map, class_ranges, FLOOD_CLASSES=FLOOD_CLASSES)
         categorized_maps.append(categorized)
         
         if verbose:
@@ -92,7 +61,7 @@ def categorize_all_flood_maps(flood_maps: List[np.ndarray], class_ranges: Option
     
     return categorized_maps
 
-def visualize_all_categorized_maps(categorized_maps: List[np.ndarray], scenario_ids: Optional[List[int]] = None,
+def visualize_all_categorized_maps(categorized_maps: List[np.ndarray], FLOOD_CLASSES: Dict[int, Dict[str, Any]], scenario_ids: Optional[List[int]] = None,
                                     figsize: Tuple[int, int] = (25, 20), ncols: int = 5) -> plt.Figure:
     n_maps = len(categorized_maps)
     nrows = (n_maps + ncols - 1) // ncols
@@ -159,7 +128,7 @@ def extract_patches_from_map(map_data: np.ndarray, patch_size: int, stride: Opti
     
     return np.array(patches)
 
-def categorize_patch_majority_vote(patch: np.ndarray) -> int:
+def categorize_patch_majority_vote(patch: np.ndarray, FLOOD_CLASSES: Dict[int, Dict[str, Any]]) -> int:
     # Filter out NoData values (-1)
     valid_pixels = patch[patch >= 0]
     
@@ -172,7 +141,7 @@ def categorize_patch_majority_vote(patch: np.ndarray) -> int:
     
     return int(majority_class)
 
-def categorize_flood_map_patch_based(flood_map: np.ndarray, patch_size: int, stride: Optional[int] = None,
+def categorize_flood_map_patch_based(flood_map: np.ndarray, FLOOD_CLASSES: Dict[int, Dict[str, Any]], patch_size: int, stride: Optional[int] = None,
                                      categorization_method: str = 'majority', class_ranges: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
@@ -181,7 +150,7 @@ def categorize_flood_map_patch_based(flood_map: np.ndarray, patch_size: int, str
         stride = patch_size
     
     # Categorize full map (pixel-wise)
-    categorized_map = categorize_flood_map(flood_map, class_ranges)
+    categorized_map = categorize_flood_map(flood_map, class_ranges, FLOOD_CLASSES=FLOOD_CLASSES)
     
     # Extract patches from categorized map
     patches = extract_patches_from_map(categorized_map, patch_size, stride)
@@ -191,7 +160,7 @@ def categorize_flood_map_patch_based(flood_map: np.ndarray, patch_size: int, str
     
     if categorization_method == 'majority':
         for patch in patches:
-            label = categorize_patch_majority_vote(patch)
+            label = categorize_patch_majority_vote(patch, FLOOD_CLASSES=FLOOD_CLASSES)
             patch_labels.append(label)
     else:
         raise ValueError(f"Unknown categorization method: {categorization_method}")
@@ -215,7 +184,7 @@ def categorize_flood_map_patch_based(flood_map: np.ndarray, patch_size: int, str
     
     return patch_labels, metadata
 
-def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: int, stride: Optional[int] = None, categorization_method: str = 'majority',
+def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], FLOOD_CLASSES: Dict[int, Dict[str, Any]], patch_size: int, stride: Optional[int] = None, categorization_method: str = 'majority',
                                     class_ranges: Optional[Dict] = None, verbose: bool = True) -> Tuple[List[np.ndarray], List[Dict]]:
     if class_ranges is None:
         class_ranges = {k: v['range'] for k, v in FLOOD_CLASSES.items()}
@@ -243,7 +212,7 @@ def categorize_all_flood_maps_patch(flood_maps: List[np.ndarray], patch_size: in
         print()
     
     for idx, flood_map in enumerate(flood_maps):
-        patch_labels, metadata = categorize_flood_map_patch_based(flood_map, patch_size=patch_size, stride=stride, categorization_method=categorization_method, class_ranges=class_ranges)
+        patch_labels, metadata = categorize_flood_map_patch_based(flood_map, FLOOD_CLASSES=FLOOD_CLASSES, patch_size=patch_size, stride=stride, categorization_method=categorization_method, class_ranges=class_ranges)
         categorized_patches_list.append(patch_labels)
         metadata_list.append(metadata)
         

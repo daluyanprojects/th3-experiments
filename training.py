@@ -218,15 +218,18 @@ def train_one_fold(model: nn.Module, train_loader: DataLoader, val_loader: DataL
     model.load_state_dict(best_model_state)
     return history, best_macro_f1
 
-
 def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
-                cfg: TrainConfig, device: str) -> Tuple[List[Dict], int]:
+                cfg: TrainConfig, device: str, checkpoint_dir: Path = None) -> Tuple[List[Dict], int]:
+    
+    checkpoint_dir = Path(checkpoint_dir)
+    
     scenario_ids = list(scenario_to_samples.keys())
     folds        = create_kfold_splits(scenario_ids, cfg.num_folds)
 
     print("\n" + "="*70)
     print("K-FOLD CROSS-VALIDATION")
     print("="*70)
+    print(f"Checkpoint directory: {checkpoint_dir}")
     for i, (train_scen, val_scen) in enumerate(folds):
         print(f"Fold {i+1}: {len(train_scen)} train scenarios, {len(val_scen)} val scenarios")
 
@@ -250,7 +253,8 @@ def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
         fold_histories.append(history)
         fold_best_f1s.append(best_f1)
 
-        save_dir = cfg.output_dir / f'fold_{fold_idx+1}'
+        # Save checkpoint to specified directory
+        save_dir = checkpoint_dir / f'fold_{fold_idx+1}'
         save_dir.mkdir(parents=True, exist_ok=True)
         torch.save({'model_state_dict': fold_model.state_dict(),
                     'best_macro_f1':    best_f1,
@@ -267,6 +271,7 @@ def train_kfold(model, full_dataset, scenario_to_samples: Dict[int, List[int]],
         marker = " ← BEST" if i == best_fold else ""
         print(f"  Fold {i+1}: {f1:.4f}{marker}")
     print(f"\n  Average: {np.mean(fold_best_f1s):.4f} ± {np.std(fold_best_f1s):.4f}")
+    print(f"\n  Checkpoints saved to: {checkpoint_dir}")
     print("="*70)
 
     return fold_histories, best_fold

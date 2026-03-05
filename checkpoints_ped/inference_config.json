@@ -1,0 +1,27 @@
+{
+  "rain_min": 0.0,
+  "rain_max": 189.85308837890625,
+  "patch_size": 4,
+  "num_classes": 5,
+  "input_channels": 11,
+  "conditioning_dim": 21,
+  "drain_channels": [
+    3,
+    4,
+    5,
+    6
+  ],
+  "soil_channels": [
+    7,
+    8,
+    9,
+    10
+  ],
+  "depth_min": 6.0,
+  "depth_max": 78.0,
+  "n_steps": 13,
+  "n_real": 12,
+  "dt_min": 5.0,
+  "duration_hr": 1.0,
+  "best_fold": 3
+}
