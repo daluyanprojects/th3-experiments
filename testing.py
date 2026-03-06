@@ -49,16 +49,7 @@ def predict_scenario_with_flags(
     scenario_idx     : int,
     device           : str,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Run inference for a single scenario.
-
-    Returns
-    -------
-    patch_predictions : np.ndarray, shape (patches_per_scenario,)
-        Argmax class index for every patch.
-    patch_confidences : np.ndarray, shape (patches_per_scenario,)
-        Max softmax probability for every patch (0-1). Higher = more certain.
-    """
+    
     model.eval()
     patches_per_scenario = scenario_dataset.patches_per_scenario
     start_idx            = scenario_idx * patches_per_scenario
@@ -118,6 +109,11 @@ def calculate_scenario_metrics(
     precision, recall, f1, support = precision_recall_fscore_support(
         y_true, y_pred, labels=range(num_classes), zero_division=0
     )
+    
+    # Calculate both macro and weighted F1 scores
+    f1_macro   = np.mean(f1)
+    f1_weighted = np.average(f1, weights=support)
+    
     iou_per_class = calculate_iou_per_class(y_true, y_pred, num_classes)
     mean_iou      = float(np.mean(list(iou_per_class.values())))
     cm            = confusion_matrix(y_true, y_pred, labels=range(num_classes))
@@ -129,6 +125,8 @@ def calculate_scenario_metrics(
         'precision_per_class': precision.tolist(),
         'recall_per_class'   : recall.tolist(),
         'f1_per_class'       : f1.tolist(),
+        'f1_macro'           : float(f1_macro),
+        'f1_weighted'        : float(f1_weighted),
         'support_per_class'  : support.tolist(),
         'confusion_matrix'   : cm.tolist(),
     }
@@ -167,15 +165,6 @@ def evaluate_test_scenarios(
     device              : str,
     save_dir            : str,
 ) -> Tuple[dict, dict, dict]:
-    """
-    Runs 4 evaluation passes — one per hasDrainage / hasSoil combination.
-
-    Returns
-    -------
-    all_config_results      : { config_label: { scenario_id: metrics_dict } }
-    all_config_predictions  : { config_label: { scenario_id: predicted_map  (H×W int) } }
-    all_config_confidences  : { config_label: { scenario_id: confidence_map (H×W float32) } }
-    """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -239,14 +228,16 @@ def evaluate_test_scenarios(
         # ── Per-config summary ────────────────────────────────────────────────
         avg_acc  = np.mean([r['accuracy']              for r in scenario_results.values()])
         avg_miou = np.mean([r['mean_iou']              for r in scenario_results.values()])
-        avg_f1   = np.mean([np.mean(r['f1_per_class']) for r in scenario_results.values()])
+        avg_f1_macro = np.mean([r['f1_macro']          for r in scenario_results.values()])
+        avg_f1_weighted = np.mean([r['f1_weighted']    for r in scenario_results.values()])
         avg_conf = np.mean([r['mean_confidence']       for r in scenario_results.values()])
         avg_low  = np.mean([r['frac_low_confidence']   for r in scenario_results.values()])
 
         print(f"\n  ── {label} Summary ──")
         print(f"  Avg Accuracy       : {avg_acc:.4f}")
         print(f"  Avg Mean IoU       : {avg_miou:.4f}")
-        print(f"  Avg Macro F1       : {avg_f1:.4f}")
+        print(f"  Avg Macro F1       : {avg_f1_macro:.4f}")
+        print(f"  Avg Weighted F1    : {avg_f1_weighted:.4f}")
         print(f"  Avg Confidence     : {avg_conf:.4f}")
         print(f"  Avg Low-Conf Ratio : {avg_low*100:.1f}%")
 
@@ -516,9 +507,11 @@ def plot_flood_on_dem(
         m          = metrics
         prec_macro = np.mean(m['precision_per_class'])
         rec_macro  = np.mean(m['recall_per_class'])
-        f1_macro   = np.mean(m['f1_per_class'])
+        f1_macro   = m.get('f1_macro', np.mean(m['f1_per_class']))
+        f1_weighted = m.get('f1_weighted', np.average(m['f1_per_class'], 
+                                                     weights=m['support_per_class']))
         title     += (f"\nAcc={m['accuracy']:.3f}  Prec={prec_macro:.3f}  "
-                      f"Rec={rec_macro:.3f}  F1={f1_macro:.3f}  "
+                      f"Rec={rec_macro:.3f}  F1_M={f1_macro:.3f}  F1_W={f1_weighted:.3f}  "
                       f"IoU={m['mean_iou']:.3f}")
         if 'mean_confidence' in m:
             title += (f"\nAvgConf={m['mean_confidence']:.3f}  "

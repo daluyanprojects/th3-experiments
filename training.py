@@ -181,7 +181,6 @@ def train_one_fold(model: nn.Module, train_loader: DataLoader, val_loader: DataL
     criterion     = CombinedLoss(class_weights=class_weights)
     optimizer     = create_optimizer(model, cfg)
     scheduler     = WarmupCosineScheduler(optimizer, cfg)
-    early_stopper = EarlyStopping(patience=cfg.early_stop_patience)
 
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [],
                'val_acc': [], 'val_macro_f1': [], 'lr': []}
@@ -210,10 +209,6 @@ def train_one_fold(model: nn.Module, train_loader: DataLoader, val_loader: DataL
             best_macro_f1    = val_macro_f1
             best_model_state = model.state_dict().copy()
             print(f"  → Best Macro F1: {best_macro_f1:.4f}")
-
-        if early_stopper(val_macro_f1):
-            print(f"  Early stopping at epoch {epoch+1}")
-            break
 
     model.load_state_dict(best_model_state)
     return history, best_macro_f1

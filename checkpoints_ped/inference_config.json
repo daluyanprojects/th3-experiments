@@ -23,5 +23,5 @@
   "n_real": 12,
   "dt_min": 5.0,
   "duration_hr": 1.0,
-  "best_fold": 3
+  "best_fold": 1
 }
