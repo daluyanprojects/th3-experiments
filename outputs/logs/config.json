@@ -12,8 +12,8 @@
   "conditioning_hidden": 64,
   "learnable_pos_enc": true,
   "batch_size": 1024,
-  "num_epochs": 50,
-  "num_folds": 3,
+  "num_epochs": 1,
+  "num_folds": 2,
   "lr": 0.0003,
   "weight_decay": 0.0001,
   "grad_clip_norm": 1.0,
@@ -29,5 +29,6 @@
   "num_classes": 5,
   "spatial_channels": 3,
   "rainfall_timesteps": 13,
-  "output_dir": "outputs"
+  "output_dir": "outputs",
+  "output_ped_dir": "outputs_ped"
 }

@@ -12,7 +12,7 @@
   "conditioning_hidden": 64,
   "learnable_pos_enc": true,
   "batch_size": 1024,
-  "num_epochs": 2,
+  "num_epochs": 1,
   "num_folds": 2,
   "lr": 0.0003,
   "weight_decay": 0.0001,

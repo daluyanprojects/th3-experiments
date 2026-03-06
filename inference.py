@@ -47,6 +47,7 @@ class InferenceEngine:
     checkpoint_path : Optional[str | Path] = None
     patch_data_path : Optional[str | Path] = None
     device_str      : Optional[str]        = None
+    config          : Optional[TrainConfig] = None
 
     # Populated during __post_init__
     model           : torch.nn.Module      = field(init=False, repr=False)
@@ -58,7 +59,7 @@ class InferenceEngine:
     batch_size      : int                  = field(init=False)
 
     def __post_init__(self):
-        self.cfg    = TrainConfig()
+        self.cfg = self.config if self.config is not None else TrainConfig()
         self.cfg.use_conditioning = True
         self.device = torch.device(
             self.device_str if self.device_str
@@ -66,6 +67,9 @@ class InferenceEngine:
         )
 
         print(f"[InferenceEngine] device = {self.device}")
+        print(f"[InferenceEngine] Config: embed_dim={self.cfg.embed_dim}, "
+              f"num_layers={self.cfg.num_layers}, "
+              f"rainfall_hidden={self.cfg.rainfall_hidden}")
         self._load_patches()
         self._load_model()
         self.batch_size = self.cfg.batch_size
@@ -212,65 +216,37 @@ def _storm_label(storm_type: str, depth_mm: float, tpeak: Optional[float]) -> st
     return label
 
 
+# ── Prediction pipeline ────────────────────────────────────────────────────────
 def predict_with_confidence(
-    engine    : InferenceEngine,
-    storm_type: str,
-    depth_mm  : float,
-    tpeak     : Optional[float] = None,
-    verbose   : bool            = True,
+    engine      : InferenceEngine,
+    storm_type  : str,            
+    depth_mm    : float,            # Total rainfall depth in mm
+    tpeak       : float = 0.5,      # Peak time (fraction of duration)
 ) -> dict:
+
+    result = build_inference_inputs(storm_type, depth_mm, tpeak)
+    rainfall_seq = result[0]  # Rainfall sequence (13,)
+    conditioning = result[1].astype(np.float32)  # [latitude, longitude, elevation, slope] (4,)
     
-    # 1. Build hyetograph + conditioning vector
-    rainfall_seq, conditioning, warn_list = build_inference_inputs(
-        storm_type, depth_mm, tpeak
-    )
-
-    # Surface OOD warnings
-    for w in warn_list:
-        _warnings.warn(f"[OOD] {w}", stacklevel=2)
-
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"  Predicting: {_storm_label(storm_type, depth_mm, tpeak)}")
-        print(f"{'='*60}")
-        print(f"  Conditioning: pattern_type={conditioning[0]:.0f}  "
-              f"depth_norm={conditioning[1]:.3f}  "
-              f"tpeak={conditioning[2]:.2f}  "
-              f"has_tpeak={conditioning[3]:.0f}")
-        if warn_list:
-            for w in warn_list:
-                print(f"  ⚠  {w}")
-
-    # 2. Forward pass
+    # Run model forward pass
     predictions, probabilities = _run_forward(engine, rainfall_seq, conditioning)
-    confidence = probabilities.max(axis=1)   # (N,)
-
-    # 3. Reconstruct spatial map
-    flood_map = _reconstruct_map(predictions, engine.patch_indices)
-
-    # 4. Summary
+    
+    # Extract confidence (max probability per patch)
+    confidence = probabilities.max(axis=1)
+    
+    # Build summary statistics
     summary = _build_summary(predictions, probabilities)
-
-    if verbose:
-        print(f"\n  Flooded area : {summary['flooded_pct']:.1f}%  "
-              f"({summary['flooded_patches']:,} / {summary['total_patches']:,} patches)")
-        print(f"  Mean confidence : {summary['mean_confidence']:.3f}")
-        print(f"\n  {'Class':<12} {'Count':>8}  {'%':>6}  {'Avg conf':>9}")
-        print(f"  {'-'*42}")
-        for cls_info in summary['class_distribution'].values():
-            print(f"  {cls_info['name']:<12} {cls_info['count']:>8,}  "
-                  f"{cls_info['pct']:>5.1f}%  {cls_info['mean_confidence']:>9.3f}")
-
+    
     return {
-        'flood_map'         : flood_map,
-        'predictions'       : predictions,
-        'probabilities'     : probabilities,
-        'confidence'        : confidence,
-        'rainfall_sequence' : rainfall_seq,
-        'conditioning'      : conditioning,
-        'summary'           : summary,
-        'warnings'          : warn_list,
-        'storm_label'       : _storm_label(storm_type, depth_mm, tpeak),
+        'predictions'    : predictions,
+        'probabilities'  : probabilities,
+        'confidence'     : confidence,
+        'flood_map'      : _reconstruct_map(predictions, engine.patch_indices),
+        'storm_type'     : storm_type,
+        'depth_mm'       : depth_mm,
+        'tpeak'          : tpeak,
+        'storm_label'    : f"{storm_type.capitalize()} {depth_mm:.0f}mm (tpeak={tpeak})",
+        **summary,
     }
 
 def compute_class_pcts(flood_map):
@@ -279,41 +255,27 @@ def compute_class_pcts(flood_map):
     return {i: 100 * (valid == i).sum() / total if total > 0 else 0.0
             for i in range(5)}
 
-def _load_barangay_band_from_geojson(geojson_path, dst_transform, dst_crs, H, W):
+def load_barangay_band(geojson_path, dst_transform, dst_crs, H, W):    
     gdf = gpd.read_file(geojson_path)
-    gdf = gdf.to_crs(dst_crs)
     gdf = gdf.dropna(subset=['psgc_code']).copy()
-
-    # ── Drop null/empty/invalid geometries ───────────────────────────────────
     gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna() & gdf.geometry.is_valid]
-
     gdf['psgc_int'] = gdf['psgc_code'].astype(float).astype(int)
-
-    # ── Clip to DEM grid extent ───────────────────────────────────────────────
-    left   = dst_transform.c
-    top    = dst_transform.f
-    right  = left + dst_transform.a * W
-    bottom = top  + dst_transform.e * H
+    
+    left = dst_transform.c
+    top = dst_transform.f
+    right = left + dst_transform.a * W
+    bottom = top + dst_transform.e * H
     grid_box = box(left, min(top, bottom), right, max(top, bottom))
     gdf = gdf[gdf.geometry.intersects(grid_box)]
+    
+    print(f"  Rasterizing {len(gdf)} barangays...")
+    
+    shapes = [(geom, psgc) for geom, psgc in zip(gdf.geometry, gdf['psgc_int']) 
+              if geom is not None and not geom.is_empty]
+    
+    return rasterize(shapes, out_shape=(H, W), transform=dst_transform, 
+                     fill=0, dtype='int32', all_touched=True)
 
-    print(f"  Rasterizing {len(gdf)} barangays within DEM extent ...")
-
-    shapes = [
-        (geom, psgc)
-        for geom, psgc in zip(gdf.geometry, gdf['psgc_int'])
-        if geom is not None and not geom.is_empty
-    ]
-
-    band = rasterize(
-        shapes,
-        out_shape   = (H, W),
-        transform   = dst_transform,
-        fill        = 0,
-        dtype       = 'int32',
-        all_touched = True,
-    )
-    return band
 
 
 def _apply_mask_to_maps(

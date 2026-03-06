@@ -1,0 +1,2 @@
+patch_size,embed_dim,num_heads,num_layers,mlp_ratio,dropout,weight_decay,rainfall_hidden,conditioning_hidden,lr,warmup_epochs,grad_clip_norm,focal_gamma,ce_weight,best_f1
+4,128,8,5,1.0,0.5,0.000462258900102083,32,64,3.8234752246751835e-05,14,0.5,2.0,0.65,0.3069658910432964
