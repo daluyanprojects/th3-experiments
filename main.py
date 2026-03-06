@@ -7,13 +7,13 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import sys
-
+import torch
+from rasterio.features import rasterize
+from shapely.geometry import box
 from config import TrainConfig
 
 
-def setup_flood_visualization():
-    """Setup flood color mapping and legend for visualization"""
-    
+def setup_flood_visualization():    
     FLOOD_COLORS = {
         0: '#FFFFFF',  # No Flood
         1: '#C6DBEF',  # Light
@@ -56,11 +56,6 @@ def setup_flood_visualization():
         'legend_patches': legend_patches
     }
 
-
-# ============================================================================
-# SECTION 2: GeoTIFF Setup
-# ============================================================================
-
 def setup_geotiff_transform():
     
     # Original DEM bounds
@@ -87,11 +82,6 @@ def setup_geotiff_transform():
         'height': dst_H
     }
 
-
-# ============================================================================
-# SECTION 3: Barangay Lookup Table
-# ============================================================================
-
 # City mapping for administrative boundaries
 _CITY_LABEL = {
     'PH1303901': 'Manila City',
@@ -106,15 +96,6 @@ _CITY_LABEL = {
 
 
 def build_barangay_lookup(geojson_path: str) -> dict:
-    """
-    Build a lookup table from GeoJSON file with barangay information
-    
-    Args:
-        geojson_path: Path to manila_barangay_geojson.geojson
-        
-    Returns:
-        Dictionary mapping PSGC codes to barangay info
-    """
     print(f"Loading barangay data from {geojson_path}...")
     
     # Read GeoJSON file
@@ -146,9 +127,53 @@ def build_barangay_lookup(geojson_path: str) -> dict:
     return lookup
 
 
-# ============================================================================
-# SECTION 4: Inference Setup
-# ============================================================================
+def load_barangay_band(geojson_path: str, dst_transform, dst_crs, H, W):
+    gdf = gpd.read_file(geojson_path)
+    gdf = gdf.dropna(subset=['psgc_code']).copy()
+    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna() & gdf.geometry.is_valid]
+    gdf['psgc_int'] = gdf['psgc_code'].astype(float).astype(int)
+    
+    # Clip to grid extent
+    left = dst_transform.c
+    top = dst_transform.f
+    right = left + dst_transform.a * W
+    bottom = top + dst_transform.e * H
+    grid_box = box(left, min(top, bottom), right, max(top, bottom))
+    gdf = gdf[gdf.geometry.intersects(grid_box)]
+    
+    print(f"  Rasterizing {len(gdf)} barangays...")
+    
+    shapes = [(geom, psgc) for geom, psgc in zip(gdf.geometry, gdf['psgc_int']) 
+              if geom is not None and not geom.is_empty]
+    
+    return rasterize(shapes, out_shape=(H, W), transform=dst_transform, 
+                     fill=0, dtype='int32', all_touched=True)
+
+
+def select_best_checkpoint(checkpoint_dir: Path) -> tuple:
+    fold_checkpoints = sorted(checkpoint_dir.glob('fold_*_best.pth'))
+    
+    if not fold_checkpoints:
+        raise FileNotFoundError(f"No fold checkpoints found in {checkpoint_dir}")
+    
+    fold_scores = {}
+    
+    # Load all checkpoints and extract F1 score metric
+    print(f"  Evaluating {len(fold_checkpoints)} fold checkpoints by F1 score...")
+    for ckpt_path in fold_checkpoints:
+        try:
+            ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+            # Extract F1 score (higher is better)
+            f1_score = ckpt.get('best_monitor', float('-inf'))
+            fold_scores[ckpt_path] = {'value': f1_score}
+        except Exception as e:
+            print(f"    ⚠ Error loading {ckpt_path.name}: {e}")
+            fold_scores[ckpt_path] = {'value': float('-inf')}
+    
+    # Select checkpoint with highest F1 score
+    best_checkpoint_path = max(fold_scores.keys(), key=lambda k: fold_scores[k]['value'])
+    return best_checkpoint_path, fold_scores
+
 
 def run_flood_prediction(
     user_type: str,
@@ -163,50 +188,142 @@ def run_flood_prediction(
     if user_type.lower() not in ['pedestrian', 'vehicle']:
         raise ValueError(f"user_type must be 'pedestrian' or 'vehicle', got '{user_type}'")
     
-    if user_type.lower() == 'pedestrian':
-        from inference_ped import (
-            InferenceEngine,
-            _load_barangay_band_from_geojson,
-            run_inference
-        )
+    is_pedestrian = user_type.lower() == 'pedestrian'
+    
+    # Import correct module based on user type
+    if is_pedestrian:
+        from inference_ped import InferenceEngine, run_inference
         output_dir_param = 'output_ped_dir'
-        data_suffix = '_ped'
+        checkpoint_dir = Path('outputs_ped/checkpoints_tuned')
+        config_path = Path('outputs_ped/logs_tuned/config_tuned.json')
+        model_type = "PEDESTRIAN"
     else:  # vehicle
-        from inference import (
-            InferenceEngine,
-            _load_barangay_band_from_geojson,
-            run_inference
-        )
+        from inference import InferenceEngine, run_inference
         output_dir_param = 'output_dir'
-        data_suffix = ''
+        checkpoint_dir = Path('outputs/checkpoints_tuned')
+        config_path = Path('outputs/logs_tuned/config_tuned.json')
+        model_type = "VEHICLE"
     
-    print("\n" + "="*60)
-    print(f"Running Flood Prediction [{user_type.upper()}]")
-    print("="*60)
+    print("\n" + "="*70)
+    print(f"FLOOD PREDICTION MODEL - {model_type} MODE")
+    print("="*70)
     
-    # Setup configuration and transforms
-    cfg = TrainConfig()
+    # Setup transforms and visualization
     flood_viz = setup_flood_visualization()
     geotiff_setup = setup_geotiff_transform()
     
-    # Load barangay band
-    print("\nLoading barangay boundaries...")
-    barangay_band = _load_barangay_band_from_geojson(
+    # ✓ Load tuned configuration
+    print("\n[1] LOADING TUNED CONFIGURATION")
+    print("-" * 70)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+    
+    cfg_tuned = TrainConfig.load(str(config_path))
+    print(f"Config file: {config_path}")
+    print(f"✓ Config loaded successfully")
+    print(f"\n  Model Architecture Parameters:")
+    print(f"    • embed_dim          : {cfg_tuned.embed_dim}")
+    print(f"    • num_layers         : {cfg_tuned.num_layers}")
+    print(f"    • num_heads          : {getattr(cfg_tuned, 'num_heads', 'N/A')}")
+    print(f"    • rainfall_hidden    : {cfg_tuned.rainfall_hidden}")
+    print(f"    • mlp_ratio          : {getattr(cfg_tuned, 'mlp_ratio', 'N/A')}")
+    print(f"    • dropout            : {getattr(cfg_tuned, 'dropout', 'N/A')}")
+    print(f"\n  Training Parameters:")
+    print(f"    • batch_size         : {cfg_tuned.batch_size}")
+    print(f"    • learning_rate      : {getattr(cfg_tuned, 'learning_rate', 'N/A')}")
+    print(f"    • weight_decay       : {getattr(cfg_tuned, 'weight_decay', 'N/A')}")
+    print(f"    • num_epochs         : {getattr(cfg_tuned, 'num_epochs', 'N/A')}")
+    print(f"    • checkpoint_metric  : {cfg_tuned.checkpoint_metric}")
+    
+    # ✓ Find BEST checkpoint from tuned checkpoints directory
+    print("\n[2] LOADING CHECKPOINT")
+    print("-" * 70)
+    if not checkpoint_dir.exists():
+        raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_dir}")
+    
+    # Select best checkpoint across all folds
+    checkpoint_path, fold_scores = select_best_checkpoint(checkpoint_dir)
+    
+    print(f"Checkpoint directory: {checkpoint_dir}")
+    print(f"✓ Selected BEST checkpoint: {checkpoint_path.name}")
+    print(f"  Total folds evaluated: {len(fold_scores)}")
+    
+    # Print comparison of all folds
+    print(f"\n  Fold Performance Ranking (by F1 Score):")
+    sorted_folds = sorted(fold_scores.items(), 
+                         key=lambda x: x[1]['value'], 
+                         reverse=True)
+    for rank, (path, score_info) in enumerate(sorted_folds, 1):
+        is_best = "★ BEST" if path == checkpoint_path else "     "
+        print(f"    {rank}. {is_best} {path.name:30s} | F1: {score_info['value']:.6f}")
+    
+    # Load and display best checkpoint metadata
+    import torch
+    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    f1_score = ckpt.get('best_monitor', 'N/A')
+    print(f"\n  Best Checkpoint Details:")
+    print(f"    • F1 Score           : {f1_score}")
+    print(f"    • keys in checkpoint : {list(ckpt.keys())}")
+    
+    # Load barangay boundaries
+    print("\n[3] LOADING BARANGAY BOUNDARIES")
+    print("-" * 70)
+    print(f"GeoJSON file: {geojson_path}")
+    barangay_band = load_barangay_band(
         geojson_path,
         geotiff_setup['transform'],
         geotiff_setup['crs'],
         geotiff_setup['height'],
         geotiff_setup['width']
     )
+    print(f"✓ Barangay grid shape: {barangay_band.shape}")
+    print(f"  Unique barangays: {len(np.unique(barangay_band)) - 1}")  # -1 for fill value
     
-    # Initialize inference engine
-    print("Initializing inference engine...")
-    engine = InferenceEngine(patch_data_path=spatial_data_path)
+    # Initialize inference engine with tuned config and checkpoint
+    print("\n[4] INITIALIZING INFERENCE ENGINE")
+    print("-" * 70)
+    print(f"Initializing with:")
+    print(f"  • checkpoint_path    : {checkpoint_path}")
+    print(f"  • spatial_data_path  : {spatial_data_path}")
+    print(f"  • config             : tuned (embed_dim={cfg_tuned.embed_dim})")
+    
+    engine = InferenceEngine(
+        checkpoint_path=str(checkpoint_path),
+        patch_data_path=spatial_data_path,
+        config=cfg_tuned  # ✓ Pass tuned config!
+    )
+    
+    # Print model information
+    print("\n[5] MODEL INFORMATION")
+    print("-" * 70)
+    print(f"Model: {engine.model.__class__.__name__}")
+    print(f"Device: {engine.model.device if hasattr(engine.model, 'device') else engine.device}")
+    print(f"Mode: {'eval' if not engine.model.training else 'train'}")
+    
+    # Count parameters
+    total_params = sum(p.numel() for p in engine.model.parameters())
+    trainable_params = sum(p.numel() for p in engine.model.parameters() if p.requires_grad)
+    print(f"\nModel Parameters:")
+    print(f"  • Total parameters  : {total_params:,}")
+    print(f"  • Trainable params  : {trainable_params:,}")
+    print(f"  • Model size        : {total_params * 4 / 1024 / 1024:.2f} MB (float32)")
+    
+    # Print spatial data info
+    print(f"\nSpatial Data:")
+    print(f"  • Patches loaded    : {engine.test_spatial.shape[0]:,}")
+    print(f"  • Patch shape       : {engine.test_spatial.shape[1:]}")
+    print(f"  • Map shape         : {engine.test_dem.shape}")
+    print(f"  • Batch size        : {engine.batch_size}")
     
     # Run inference
-    print(f"\nPredicting: {storm_type.capitalize()}, {depth_mm} mm, tpeak={tpeak}")
+    print("\n[6] RUNNING INFERENCE")
+    print("-" * 70)
+    print(f"Storm parameters:")
+    print(f"  • Storm type        : {storm_type.capitalize()}")
+    print(f"  • Rainfall depth    : {depth_mm} mm")
+    print(f"  • Peak time (tpeak) : {tpeak}")
+    print(f"  • Patches to process: {engine.test_spatial.shape[0]:,}")
     
-    # Call run_inference with appropriate parameter name
     results = run_inference(
         engine=engine,
         storm_type=storm_type,
@@ -218,26 +335,50 @@ def run_flood_prediction(
         **{output_dir_param: Path(output_dir)}
     )
     
-    print(f"\n✓ File saved at: {results['tif_path']}")
+    # Print results summary
+    print("\n[7] RESULTS SUMMARY")
+    print("-" * 70)
+    print(f"Output file: {results['tif_path']}")
+    print(f"\nPrediction Statistics:")
+    print(f"  • Total patches     : {results['total_patches']:,}")
+    print(f"  • Flooded patches   : {results['flooded_patches']:,} ({results['flooded_pct']:.1f}%)")
+    print(f"  • Mean confidence   : {results['mean_confidence']:.4f}")
+    print(f"  • Dominant class    : {results['dominant_class']} ({['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme'][results['dominant_class']]})")
+    
+    print(f"\nClass Distribution:")
+    for cls, dist in results['class_distribution'].items():
+        print(f"  • {dist['name']:12s}: {dist['count']:6,} patches ({dist['pct']:5.1f}%) - "
+              f"mean conf: {dist['mean_confidence']:.4f}")
+    
+    print("\n" + "="*70)
+    print("✓ INFERENCE COMPLETE")
+    print("="*70 + "\n")
+    
     return results
 
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
+
 if __name__ == "__main__":
     
-    # Set user type directly (pedestrian or vehicle)
-    user_type = 'vehicle'  # Change to 'pedestrian' as needed
+    # ============================================================================
+    # CONFIGURATION - Edit these to change behavior
+    # ============================================================================
     
-    # Define file paths based on user type
+    # Set user type: 'pedestrian' or 'vehicle'
+    user_type = 'pedestrian'  # ← Change this to 'vehicle' to use vehicle model
+    
+    # Define file paths
     GEOJSON_PATH = 'manila_barangay_geojson.geojson'
     
     if user_type == 'pedestrian':
         SPATIAL_DATA_PATH = 'outputs_ped/spatial_data.npz'
-        OUTPUT_DIR = './input_testing'
+        OUTPUT_DIR = './input_testing_ped'
     else:  # vehicle
         SPATIAL_DATA_PATH = 'outputs/spatial_data.npz'
         OUTPUT_DIR = './input_testing'
+    
+    # ============================================================================
+    # MAIN EXECUTION
+    # ============================================================================
     
     print(f"\n[{user_type.upper()}] Mode selected")
     print(f"  Spatial data: {SPATIAL_DATA_PATH}")
@@ -251,9 +392,9 @@ if __name__ == "__main__":
     print(f'\nBARANGAY_LOOKUP ready  : {len(barangay_lookup):,} entries')
     print(f'PSGC range             : {min(barangay_lookup):,} – {max(barangay_lookup):,}')
     cities = sorted(set(v["city"] for v in barangay_lookup.values()))
-    print(f'Cities                 : {cities}')
+    print(f'Cities                 : {", ".join(cities)}')
     
-    # Run flood prediction
+    # Run flood prediction with tuned model
     results = run_flood_prediction(
         user_type=user_type,
         geojson_path=GEOJSON_PATH,
@@ -264,4 +405,6 @@ if __name__ == "__main__":
         tpeak=0.5
     )
     
-    print("\nDone! ✓")
+    print("\n" + "="*60)
+    print("Done! ✓")
+    print("="*60)
