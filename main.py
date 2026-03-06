@@ -10,6 +10,9 @@ import sys
 import torch
 from rasterio.features import rasterize
 from shapely.geometry import box
+import os
+import json
+
 from config import TrainConfig
 
 
@@ -165,196 +168,178 @@ def select_best_checkpoint(checkpoint_dir: Path) -> tuple:
             ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
             # Extract F1 score (higher is better)
             f1_score = ckpt.get('best_monitor', float('-inf'))
-            fold_scores[ckpt_path] = {'value': f1_score}
+            fold_scores[ckpt_path] = {
+                'value': f1_score,
+                'epoch': ckpt.get('epoch', 'N/A'),
+                'global_step': ckpt.get('global_step', 'N/A')
+            }
         except Exception as e:
             print(f"    ⚠ Error loading {ckpt_path.name}: {e}")
             fold_scores[ckpt_path] = {'value': float('-inf')}
     
     # Select checkpoint with highest F1 score
     best_checkpoint_path = max(fold_scores.keys(), key=lambda k: fold_scores[k]['value'])
+    
     return best_checkpoint_path, fold_scores
 
 
-def run_flood_prediction(
+def run_complete_testing(
     user_type: str,
     geojson_path: str,
     spatial_data_path: str,
     output_dir: str,
-    storm_type: str,
-    depth_mm: float,
-    tpeak: float
+    storm_type: str = 'triangular',
+    depth_mm: float = 50.0,
+    tpeak: float = 0.5,
+    mask_tif_path: str = 'manila_box_shape.tif'
 ):
-    # Validate user_type
-    if user_type.lower() not in ['pedestrian', 'vehicle']:
-        raise ValueError(f"user_type must be 'pedestrian' or 'vehicle', got '{user_type}'")
-    
     is_pedestrian = user_type.lower() == 'pedestrian'
     
-    # Import correct module based on user type
+    # Import correct modules based on user type
     if is_pedestrian:
-        from inference_ped import InferenceEngine, run_inference
-        output_dir_param = 'output_ped_dir'
-        checkpoint_dir = Path('outputs_ped/checkpoints_tuned')
-        config_path = Path('outputs_ped/logs_tuned/config_tuned.json')
-        model_type = "PEDESTRIAN"
+        from inference_ped import InferenceEngine as InferenceEngine_Mode, run_inference
     else:  # vehicle
-        from inference import InferenceEngine, run_inference
-        output_dir_param = 'output_dir'
-        checkpoint_dir = Path('outputs/checkpoints_tuned')
-        config_path = Path('outputs/logs_tuned/config_tuned.json')
-        model_type = "VEHICLE"
+        from inference import InferenceEngine as InferenceEngine_Mode, run_inference
     
     print("\n" + "="*70)
-    print(f"FLOOD PREDICTION MODEL - {model_type} MODE")
+    print(f"COMPLETE TESTING PIPELINE - {user_type.upper()} MODE")
     print("="*70)
     
     # Setup transforms and visualization
-    flood_viz = setup_flood_visualization()
     geotiff_setup = setup_geotiff_transform()
+    dem_transform = geotiff_setup['transform']
+    dem_crs = geotiff_setup['crs']
     
-    # ✓ Load tuned configuration
-    print("\n[1] LOADING TUNED CONFIGURATION")
+    # ✓ Load barangay boundaries
+    print("\n[1] LOADING BARANGAY BOUNDARIES")
     print("-" * 70)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config not found: {config_path}")
+    print(f"GeoJSON file: {geojson_path}")
+    _barangay_band = load_barangay_band(
+        geojson_path,
+        dem_transform,
+        dem_crs,
+        geotiff_setup['height'],
+        geotiff_setup['width']
+    )
+    print(f"✓ Barangay grid shape: {_barangay_band.shape}")
+    print(f"  Unique barangays: {len(np.unique(_barangay_band)) - 1}")
+    
+    # ✓ Load metadata
+    print("\n[2] LOADING METADATA")
+    print("-" * 70)
+    if is_pedestrian:
+        metadata_path = Path('outputs_ped/logs_tuned/metadata.json')
+    else:
+        metadata_path = Path('outputs/logs_tuned/metadata.json')
+    
+    if metadata_path.exists():
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        best_fold_idx = metadata.get('best_fold_idx', 0)
+        print(f"✓ Loaded metadata from {metadata_path}")
+        print(f"  best_fold_idx: {best_fold_idx}")
+    else:
+        print(f"⚠ Metadata not found at {metadata_path}")
+        best_fold_idx = 0
+    
+    # ✓ Load config
+    print("\n[3] LOADING CONFIG")
+    print("-" * 70)
+    if is_pedestrian:
+        config_path = Path('outputs_ped/logs_tuned/config_tuned.json')
+    else:
+        config_path = Path('outputs/logs_tuned/config_tuned.json')
     
     cfg_tuned = TrainConfig.load(str(config_path))
-    print(f"Config file: {config_path}")
-    print(f"✓ Config loaded successfully")
-    print(f"\n  Model Architecture Parameters:")
-    print(f"    • embed_dim          : {cfg_tuned.embed_dim}")
-    print(f"    • num_layers         : {cfg_tuned.num_layers}")
-    print(f"    • num_heads          : {getattr(cfg_tuned, 'num_heads', 'N/A')}")
-    print(f"    • rainfall_hidden    : {cfg_tuned.rainfall_hidden}")
-    print(f"    • mlp_ratio          : {getattr(cfg_tuned, 'mlp_ratio', 'N/A')}")
-    print(f"    • dropout            : {getattr(cfg_tuned, 'dropout', 'N/A')}")
-    print(f"\n  Training Parameters:")
-    print(f"    • batch_size         : {cfg_tuned.batch_size}")
-    print(f"    • learning_rate      : {getattr(cfg_tuned, 'learning_rate', 'N/A')}")
-    print(f"    • weight_decay       : {getattr(cfg_tuned, 'weight_decay', 'N/A')}")
-    print(f"    • num_epochs         : {getattr(cfg_tuned, 'num_epochs', 'N/A')}")
-    print(f"    • checkpoint_metric  : {cfg_tuned.checkpoint_metric}")
+    print(f"✓ Loaded {config_path}")
+    print(f"  embed_dim: {cfg_tuned.embed_dim}")
+    print(f"  num_layers: {cfg_tuned.num_layers}")
+    print(f"  rainfall_hidden: {cfg_tuned.rainfall_hidden}")
     
-    # ✓ Find BEST checkpoint from tuned checkpoints directory
-    print("\n[2] LOADING CHECKPOINT")
+    # ✓ Load checkpoint
+    print("\n[4] LOADING CHECKPOINT")
     print("-" * 70)
-    if not checkpoint_dir.exists():
-        raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_dir}")
+    if is_pedestrian:
+        checkpoint_dir = Path('outputs_ped/checkpoints_tuned')
+    else:
+        checkpoint_dir = Path('outputs/checkpoints_tuned')
     
-    # Select best checkpoint across all folds
     checkpoint_path, fold_scores = select_best_checkpoint(checkpoint_dir)
-    
-    print(f"Checkpoint directory: {checkpoint_dir}")
     print(f"✓ Selected BEST checkpoint: {checkpoint_path.name}")
     print(f"  Total folds evaluated: {len(fold_scores)}")
     
-    # Print comparison of all folds
-    print(f"\n  Fold Performance Ranking (by F1 Score):")
+    # Print fold ranking
     sorted_folds = sorted(fold_scores.items(), 
                          key=lambda x: x[1]['value'], 
                          reverse=True)
     for rank, (path, score_info) in enumerate(sorted_folds, 1):
         is_best = "★ BEST" if path == checkpoint_path else "     "
-        print(f"    {rank}. {is_best} {path.name:30s} | F1: {score_info['value']:.6f}")
+        print(f"    {rank}. {is_best} {path.name:30s} | F1: {score_info['value']:.6f} | epoch: {score_info['epoch']}")
     
-    # Load and display best checkpoint metadata
-    import torch
-    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-    f1_score = ckpt.get('best_monitor', 'N/A')
-    print(f"\n  Best Checkpoint Details:")
-    print(f"    • F1 Score           : {f1_score}")
-    print(f"    • keys in checkpoint : {list(ckpt.keys())}")
-    
-    # Load barangay boundaries
-    print("\n[3] LOADING BARANGAY BOUNDARIES")
+    # ✓ Initialize inference engine
+    print("\n[5] INITIALIZING INFERENCE ENGINE")
     print("-" * 70)
-    print(f"GeoJSON file: {geojson_path}")
-    barangay_band = load_barangay_band(
-        geojson_path,
-        geotiff_setup['transform'],
-        geotiff_setup['crs'],
-        geotiff_setup['height'],
-        geotiff_setup['width']
-    )
-    print(f"✓ Barangay grid shape: {barangay_band.shape}")
-    print(f"  Unique barangays: {len(np.unique(barangay_band)) - 1}")  # -1 for fill value
-    
-    # Initialize inference engine with tuned config and checkpoint
-    print("\n[4] INITIALIZING INFERENCE ENGINE")
-    print("-" * 70)
-    print(f"Initializing with:")
-    print(f"  • checkpoint_path    : {checkpoint_path}")
-    print(f"  • spatial_data_path  : {spatial_data_path}")
-    print(f"  • config             : tuned (embed_dim={cfg_tuned.embed_dim})")
-    
-    engine = InferenceEngine(
+    engine = InferenceEngine_Mode(
         checkpoint_path=str(checkpoint_path),
         patch_data_path=spatial_data_path,
-        config=cfg_tuned  # ✓ Pass tuned config!
+        config=cfg_tuned
     )
+    print(f"✓ Inference engine initialized")
+    print(f"  Spatial data shape: {engine.test_spatial.shape}")
+    print(f"  DEM shape: {engine.test_dem.shape}")
     
-    # Print model information
-    print("\n[5] MODEL INFORMATION")
-    print("-" * 70)
-    print(f"Model: {engine.model.__class__.__name__}")
-    print(f"Device: {engine.model.device if hasattr(engine.model, 'device') else engine.device}")
-    print(f"Mode: {'eval' if not engine.model.training else 'train'}")
-    
-    # Count parameters
-    total_params = sum(p.numel() for p in engine.model.parameters())
-    trainable_params = sum(p.numel() for p in engine.model.parameters() if p.requires_grad)
-    print(f"\nModel Parameters:")
-    print(f"  • Total parameters  : {total_params:,}")
-    print(f"  • Trainable params  : {trainable_params:,}")
-    print(f"  • Model size        : {total_params * 4 / 1024 / 1024:.2f} MB (float32)")
-    
-    # Print spatial data info
-    print(f"\nSpatial Data:")
-    print(f"  • Patches loaded    : {engine.test_spatial.shape[0]:,}")
-    print(f"  • Patch shape       : {engine.test_spatial.shape[1:]}")
-    print(f"  • Map shape         : {engine.test_dem.shape}")
-    print(f"  • Batch size        : {engine.batch_size}")
-    
-    # Run inference
+    # ✓ Run inference
     print("\n[6] RUNNING INFERENCE")
     print("-" * 70)
     print(f"Storm parameters:")
     print(f"  • Storm type        : {storm_type.capitalize()}")
     print(f"  • Rainfall depth    : {depth_mm} mm")
     print(f"  • Peak time (tpeak) : {tpeak}")
-    print(f"  • Patches to process: {engine.test_spatial.shape[0]:,}")
     
-    results = run_inference(
-        engine=engine,
-        storm_type=storm_type,
-        depth_mm=depth_mm,
-        tpeak=tpeak,
-        dem_transform=geotiff_setup['transform'],
-        dem_crs=geotiff_setup['crs'],
-        barangay_band=barangay_band,
-        **{output_dir_param: Path(output_dir)}
-    )
+    # Get absolute path to mask file
+    repo_root = os.getcwd()
+    mask_path = os.path.join(repo_root, mask_tif_path)
     
-    # Print results summary
+    # Call run_inference with correct parameters based on user type
+    if is_pedestrian:
+        res = run_inference(
+            engine=engine,
+            storm_type=storm_type,
+            depth_mm=depth_mm,
+            tpeak=tpeak,
+            output_ped_dir=Path(output_dir),
+            dem_transform=dem_transform,
+            dem_crs=dem_crs,
+            barangay_band=_barangay_band,
+            mask_tif_path=mask_path
+        )
+    else:  # vehicle
+        res = run_inference(
+            engine=engine,
+            storm_type=storm_type,
+            depth_mm=depth_mm,
+            tpeak=tpeak,
+            output_dir=Path(output_dir),
+            dem_transform=dem_transform,
+            dem_crs=dem_crs,
+            barangay_band=_barangay_band,
+            mask_tif_path=mask_path
+        )
+    
+    # ✓ Print results summary
     print("\n[7] RESULTS SUMMARY")
     print("-" * 70)
-    print(f"Output file: {results['tif_path']}")
+    print(f"File saved at: {res['tif_path']}")
     print(f"\nPrediction Statistics:")
-    print(f"  • Total patches     : {results['total_patches']:,}")
-    print(f"  • Flooded patches   : {results['flooded_patches']:,} ({results['flooded_pct']:.1f}%)")
-    print(f"  • Mean confidence   : {results['mean_confidence']:.4f}")
-    print(f"  • Dominant class    : {results['dominant_class']} ({['No Flood', 'Light', 'Moderate', 'Heavy', 'Extreme'][results['dominant_class']]})")
-    
-    print(f"\nClass Distribution:")
-    for cls, dist in results['class_distribution'].items():
-        print(f"  • {dist['name']:12s}: {dist['count']:6,} patches ({dist['pct']:5.1f}%) - "
-              f"mean conf: {dist['mean_confidence']:.4f}")
+    print(f"  • Total patches     : {res['total_patches']:,}")
+    print(f"  • Flooded patches   : {res['flooded_patches']:,} ({res['flooded_pct']:.1f}%)")
+    print(f"  • Mean confidence   : {res['mean_confidence']:.4f}")
     
     print("\n" + "="*70)
-    print("✓ INFERENCE COMPLETE")
+    print("✓ TESTING COMPLETE")
     print("="*70 + "\n")
     
-    return results
+    return res
 
 
 if __name__ == "__main__":
@@ -394,17 +379,21 @@ if __name__ == "__main__":
     cities = sorted(set(v["city"] for v in barangay_lookup.values()))
     print(f'Cities                 : {", ".join(cities)}')
     
-    # Run flood prediction with tuned model
-    results = run_flood_prediction(
+    # Run complete testing pipeline with user-specific logic
+    print("\n\n")
+    print("▼" * 70)
+    print("PROCEEDING TO COMPLETE TESTING PIPELINE")
+    print("▼" * 70)
+    
+    test_results = run_complete_testing(
         user_type=user_type,
         geojson_path=GEOJSON_PATH,
         spatial_data_path=SPATIAL_DATA_PATH,
         output_dir=OUTPUT_DIR,
         storm_type='triangular',
         depth_mm=50.0,
-        tpeak=0.5
+        tpeak=0.5,
+        mask_tif_path='manila_box_shape.tif'
     )
     
-    print("\n" + "="*60)
     print("Done! ✓")
-    print("="*60)
