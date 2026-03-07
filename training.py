@@ -72,24 +72,6 @@ class WarmupCosineScheduler:
         return lr
 
 
-class EarlyStopping:
-    def __init__(self, patience: int):
-        self.patience    = patience
-        self.counter     = 0
-        self.best_score  = -float('inf')
-        self.should_stop = False
-
-    def __call__(self, score: float) -> bool:
-        if score > self.best_score + 1e-4:
-            self.best_score = score
-            self.counter    = 0
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.should_stop = True
-        return self.should_stop
-
-
 def create_kfold_splits(scenario_ids: List[int], num_folds: int) -> List[Tuple[List[int], List[int]]]:
     rng          = np.random.default_rng(42)
     shuffled_ids = rng.permutation(scenario_ids)

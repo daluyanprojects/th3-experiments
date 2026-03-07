@@ -133,6 +133,8 @@ class FloodInferenceEngine:
         print(f"  Device : {self.device}")
         print(f"  Patches: {self.patches_per_map:,} per prediction")
 
+
+
     def _load_model(self, model_path: str, cfg: dict) -> ViTFloodClassifier:
         data_cfg  = DatasetConfig(
             patch_size        = cfg['patch_size'],
@@ -141,6 +143,25 @@ class FloodInferenceEngine:
             conditioning_dim  = cfg['conditioning_dim'],
         )
         model_cfg = ModelConfig()
+        
+        model_cfg.embed_dim       = cfg.get('embed_dim')
+        model_cfg.num_heads       = cfg.get('num_heads')
+        model_cfg.num_layers      = cfg.get('num_layers')
+        model_cfg.mlp_ratio       = cfg.get('mlp_ratio')
+        model_cfg.dropout         = cfg.get('dropout')
+        model_cfg.rainfall_hidden = cfg.get('rainfall_hidden')
+        model_cfg.lr              = cfg.get('lr')
+        model_cfg.weight_decay    = cfg.get('weight_decay')
+        
+        print(f"\n  Model hyperparameters from config:")
+        print(f"    embed_dim       : {model_cfg.embed_dim}")
+        print(f"    num_heads       : {model_cfg.num_heads}")
+        print(f"    num_layers      : {model_cfg.num_layers}")
+        print(f"    mlp_ratio       : {model_cfg.mlp_ratio}")
+        print(f"    dropout         : {model_cfg.dropout}")
+        print(f"    rainfall_hidden : {model_cfg.rainfall_hidden}")
+        print(f"    lr              : {model_cfg.lr}")
+        print(f"    weight_decay    : {model_cfg.weight_decay}")
 
         model = make_model(data_cfg, model_cfg)
 

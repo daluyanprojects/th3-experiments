@@ -1,0 +1,65 @@
+{
+  "data": {
+    "patch_size": 4,
+    "num_classes": 5,
+    "rainfall_timesteps": 15,
+    "num_storm_types": 4,
+    "num_channel_flags": 2,
+    "conditioning_dim": 21,
+    "input_channels": 11,
+    "training_samples": 224000,
+    "test_samples": 96000,
+    "num_train_scenarios": 35,
+    "num_test_scenarios": 15,
+    "patches_per_scenario": 6400,
+    "drain_channels": [
+      3,
+      4,
+      5,
+      6
+    ],
+    "soil_channels": [
+      7,
+      8,
+      9,
+      10
+    ],
+    "rain_min": 0.0,
+    "rain_max": 189.85308837890625,
+    "channel_breakdown": {
+      "dem": 1,
+      "infiltration": 1,
+      "landuse": 1,
+      "drainage": 4,
+      "soil": 4
+    }
+  },
+  "model": {
+    "embed_dim": 512,
+    "num_layers": 6,
+    "num_heads": 4,
+    "mlp_ratio": 1.5,
+    "dropout": 0.05,
+    "rainfall_method": "conv",
+    "learnable_pos_enc": true,
+    "rainfall_hidden": 64
+  },
+  "train": {
+    "batch_size": 1024,
+    "num_epochs": 1,
+    "num_folds": 2,
+    "lr": 0.00022093834415066264,
+    "weight_decay": 0.00033361013094697806,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "warmup_epochs": 8,
+    "min_lr": 1e-06,
+    "grad_clip_norm": 1.75,
+    "early_stop_patience": 10,
+    "checkpoint_metric": "macro_f1",
+    "output_dir": "checkpoints",
+    "output_ped_dir": "checkpoints_ped"
+  }
+}

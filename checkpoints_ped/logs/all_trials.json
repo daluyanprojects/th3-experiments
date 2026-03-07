@@ -1,0 +1,175 @@
+{
+  "num_trials": 10,
+  "trials": [
+    {
+      "number": 0,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 256,
+        "num_heads": 4,
+        "num_layers": 2,
+        "mlp_ratio": 4.0,
+        "dropout": 0.30000000000000004,
+        "rainfall_hidden": 128,
+        "lr": 0.000462258900102083,
+        "weight_decay": 2.6587543983272695e-05,
+        "warmup_epochs": 7,
+        "grad_clip_norm": 0.75
+      }
+    },
+    {
+      "number": 1,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 256,
+        "num_heads": 8,
+        "num_layers": 3,
+        "mlp_ratio": 2.0,
+        "dropout": 0.25,
+        "rainfall_hidden": 32,
+        "lr": 0.00015304852121831474,
+        "weight_decay": 1.2385137298860926e-05,
+        "warmup_epochs": 14,
+        "grad_clip_norm": 0.75
+      }
+    },
+    {
+      "number": 2,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 512,
+        "num_heads": 4,
+        "num_layers": 5,
+        "mlp_ratio": 2.5,
+        "dropout": 0.05,
+        "rainfall_hidden": 128,
+        "lr": 3.292759134423613e-05,
+        "weight_decay": 0.00021137059440645722,
+        "warmup_epochs": 9,
+        "grad_clip_norm": 1.25
+      }
+    },
+    {
+      "number": 3,
+      "state": "TrialState.COMPLETE",
+      "value": 0.26424644344440607,
+      "params": {
+        "embed_dim": 512,
+        "num_heads": 8,
+        "num_layers": 4,
+        "mlp_ratio": 4.0,
+        "dropout": 0.0,
+        "rainfall_hidden": 128,
+        "lr": 5.989003672254293e-05,
+        "weight_decay": 3.488976654890367e-05,
+        "warmup_epochs": 18,
+        "grad_clip_norm": 1.0
+      }
+    },
+    {
+      "number": 4,
+      "state": "TrialState.COMPLETE",
+      "value": 0.22153996428114248,
+      "params": {
+        "embed_dim": 256,
+        "num_heads": 16,
+        "num_layers": 5,
+        "mlp_ratio": 1.5,
+        "dropout": 0.0,
+        "rainfall_hidden": 32,
+        "lr": 0.000348771262454593,
+        "weight_decay": 1.4063366777718176e-05,
+        "warmup_epochs": 10,
+        "grad_clip_norm": 0.5
+      }
+    },
+    {
+      "number": 5,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 128,
+        "num_heads": 16,
+        "num_layers": 5,
+        "mlp_ratio": 3.0,
+        "dropout": 0.45,
+        "rainfall_hidden": 128,
+        "lr": 0.0003323304206226791,
+        "weight_decay": 0.0001326033192269654,
+        "warmup_epochs": 17,
+        "grad_clip_norm": 1.25
+      }
+    },
+    {
+      "number": 6,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 128,
+        "num_heads": 16,
+        "num_layers": 3,
+        "mlp_ratio": 2.5,
+        "dropout": 0.45,
+        "rainfall_hidden": 128,
+        "lr": 2.8681134821030064e-05,
+        "weight_decay": 1.425475704402744e-05,
+        "warmup_epochs": 9,
+        "grad_clip_norm": 0.75
+      }
+    },
+    {
+      "number": 7,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 128,
+        "num_heads": 4,
+        "num_layers": 6,
+        "mlp_ratio": 2.5,
+        "dropout": 0.4,
+        "rainfall_hidden": 32,
+        "lr": 2.8567374298471872e-05,
+        "weight_decay": 7.148510793512978e-05,
+        "warmup_epochs": 18,
+        "grad_clip_norm": 2.0
+      }
+    },
+    {
+      "number": 8,
+      "state": "TrialState.COMPLETE",
+      "value": 0.17566877430778532,
+      "params": {
+        "embed_dim": 256,
+        "num_heads": 16,
+        "num_layers": 6,
+        "mlp_ratio": 2.0,
+        "dropout": 0.25,
+        "rainfall_hidden": 128,
+        "lr": 0.0008411909465645721,
+        "weight_decay": 3.188339735100187e-05,
+        "warmup_epochs": 12,
+        "grad_clip_norm": 1.0
+      }
+    },
+    {
+      "number": 9,
+      "state": "TrialState.COMPLETE",
+      "value": 0.27040456714187155,
+      "params": {
+        "embed_dim": 512,
+        "num_heads": 4,
+        "num_layers": 6,
+        "mlp_ratio": 1.5,
+        "dropout": 0.05,
+        "rainfall_hidden": 64,
+        "lr": 0.00022093834415066264,
+        "weight_decay": 0.00033361013094697806,
+        "warmup_epochs": 8,
+        "grad_clip_norm": 1.75
+      }
+    }
+  ]
+}
