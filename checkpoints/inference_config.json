@@ -23,5 +23,19 @@
   "n_real": 12,
   "dt_min": 5.0,
   "duration_hr": 1.0,
-  "best_fold": 1
+  "best_fold": 1,
+  "embed_dim": 512,
+  "num_heads": 4,
+  "num_layers": 5,
+  "mlp_ratio": 2.5,
+  "dropout": 0.05,
+  "rainfall_hidden": 128,
+  "lr": 3.292759134423613e-05,
+  "weight_decay": 0.00021137059440645722,
+  "warmup_epochs": 9,
+  "grad_clip_norm": 1.25,
+  "best_trial": 2,
+  "total_trials": 10,
+  "tuning_best_f1": 0.4572832772728602,
+  "validation_f1": 0.5271920590770263
 }

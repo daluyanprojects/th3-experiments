@@ -4,7 +4,7 @@
     {
       "number": 0,
       "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "value": 0.5366427624412666,
       "params": {
         "embed_dim": 256,
         "num_heads": 4,
@@ -21,7 +21,7 @@
     {
       "number": 1,
       "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "value": 0.48621267642790345,
       "params": {
         "embed_dim": 256,
         "num_heads": 8,
@@ -38,7 +38,7 @@
     {
       "number": 2,
       "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "value": 0.5578049631228508,
       "params": {
         "embed_dim": 512,
         "num_heads": 4,
@@ -54,8 +54,8 @@
     },
     {
       "number": 3,
-      "state": "TrialState.COMPLETE",
-      "value": 0.26424644344440607,
+      "state": "TrialState.PRUNED",
+      "value": 0.43794912838840094,
       "params": {
         "embed_dim": 512,
         "num_heads": 8,
@@ -72,7 +72,7 @@
     {
       "number": 4,
       "state": "TrialState.COMPLETE",
-      "value": 0.22153996428114248,
+      "value": 0.5172804626512033,
       "params": {
         "embed_dim": 256,
         "num_heads": 16,
@@ -88,8 +88,8 @@
     },
     {
       "number": 5,
-      "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "state": "TrialState.PRUNED",
+      "value": 0.4042058986501891,
       "params": {
         "embed_dim": 128,
         "num_heads": 16,
@@ -105,8 +105,8 @@
     },
     {
       "number": 6,
-      "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "state": "TrialState.PRUNED",
+      "value": 0.17562304671848705,
       "params": {
         "embed_dim": 128,
         "num_heads": 16,
@@ -122,8 +122,8 @@
     },
     {
       "number": 7,
-      "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "state": "TrialState.PRUNED",
+      "value": 0.17562304671848705,
       "params": {
         "embed_dim": 128,
         "num_heads": 4,
@@ -139,8 +139,8 @@
     },
     {
       "number": 8,
-      "state": "TrialState.COMPLETE",
-      "value": 0.17566877430778532,
+      "state": "TrialState.PRUNED",
+      "value": 0.5494138642766817,
       "params": {
         "embed_dim": 256,
         "num_heads": 16,
@@ -157,7 +157,7 @@
     {
       "number": 9,
       "state": "TrialState.COMPLETE",
-      "value": 0.27040456714187155,
+      "value": 0.4898961581235545,
       "params": {
         "embed_dim": 512,
         "num_heads": 4,
