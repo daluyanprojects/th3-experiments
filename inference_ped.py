@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import warnings
 from typing import Optional, Dict, List, Tuple
+import json
 
 from hyetograph import build_inference_inputs
 from config import TrainConfig
@@ -105,7 +106,7 @@ class InferenceEngine:
         if self.checkpoint_path:
             ckpt_path = Path(self.checkpoint_path)
         else:
-            ckpt_dir   = self.cfg.output_ped_dir / 'checkpoints'
+            ckpt_dir   = Path(self.cfg.output_ped_dir) / 'checkpoints'
             ckpt_files = sorted(ckpt_dir.glob('fold_*_best.pth'))
             if not ckpt_files:
                 raise FileNotFoundError(f"No checkpoints found in {ckpt_dir}")
@@ -122,8 +123,17 @@ class InferenceEngine:
         ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.model.eval()
-        print(f"[InferenceEngine] Model loaded  ← {ckpt_path.name}")
-
+        
+        # Try to load F1 score from metadata
+        f1_score = None
+        logs_dir = Path(self.cfg.output_ped_dir) / 'logs_tuned'
+        metadata_path = logs_dir / 'metadata.json'
+        if metadata_path.exists():
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                    f1_score = metadata.get('best_fold_f1')
+        if f1_score is not None:
+            print(f"[InferenceEngine] Model loaded  ← {ckpt_path.name}  |  F1={f1_score:.4f}")
 
 # ── Core inference ─────────────────────────────────────────────────────────────
 @torch.no_grad()

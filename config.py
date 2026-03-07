@@ -17,8 +17,8 @@ class TrainConfig:
     conditioning_hidden: int = 64         
     learnable_pos_enc:  bool = True
     batch_size:         int = 1024
-    num_epochs:         int = 3
-    num_folds:          int = 30
+    num_epochs:         int = 20
+    num_folds:          int = 2
     lr:                 float = 3e-4
     weight_decay:       float = 1e-4
     grad_clip_norm:     float = 1.0
