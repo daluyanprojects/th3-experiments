@@ -124,8 +124,6 @@ class InferenceEngine:
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.model.eval()
         
-        # Try to load F1 score from metadata
-        f1_score = None
         logs_dir = Path(self.cfg.output_ped_dir) / 'logs_tuned'
         metadata_path = logs_dir / 'metadata.json'
         if metadata_path.exists():
