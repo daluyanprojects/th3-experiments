@@ -343,13 +343,8 @@ def run_complete_testing(
 
 
 if __name__ == "__main__":
-    
-    # ============================================================================
-    # CONFIGURATION - Edit these to change behavior
-    # ============================================================================
-    
     # Set user type: 'pedestrian' or 'vehicle'
-    user_type = 'pedestrian'  # ← Change this to 'vehicle' to use vehicle model
+    user_type = 'vehicle'  # ← Change this to 'vehicle' to use vehicle model
     
     # Define file paths
     GEOJSON_PATH = 'manila_barangay_geojson.geojson'
@@ -360,10 +355,6 @@ if __name__ == "__main__":
     else:  # vehicle
         SPATIAL_DATA_PATH = 'outputs/spatial_data.npz'
         OUTPUT_DIR = './input_testing'
-    
-    # ============================================================================
-    # MAIN EXECUTION
-    # ============================================================================
     
     print(f"\n[{user_type.upper()}] Mode selected")
     print(f"  Spatial data: {SPATIAL_DATA_PATH}")
@@ -379,21 +370,17 @@ if __name__ == "__main__":
     cities = sorted(set(v["city"] for v in barangay_lookup.values()))
     print(f'Cities                 : {", ".join(cities)}')
     
-    # Run complete testing pipeline with user-specific logic
-    print("\n\n")
-    print("▼" * 70)
     print("PROCEEDING TO COMPLETE TESTING PIPELINE")
-    print("▼" * 70)
-    
+
     test_results = run_complete_testing(
-        user_type=user_type,
-        geojson_path=GEOJSON_PATH,
-        spatial_data_path=SPATIAL_DATA_PATH,
-        output_dir=OUTPUT_DIR,
-        storm_type='triangular',
-        depth_mm=50.0,
-        tpeak=0.5,
-        mask_tif_path='manila_box_shape.tif'
+        user_type        = user_type,
+        geojson_path     = GEOJSON_PATH,
+        spatial_data_path= SPATIAL_DATA_PATH,
+        output_dir       = OUTPUT_DIR,
+        storm_type       = 'triangular',
+        depth_mm         = 50.0,
+        tpeak            = 0.5,
+        mask_tif_path    = 'manila_box_shape.tif'
     )
     
     print("Done! ✓")
