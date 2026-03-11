@@ -22,7 +22,7 @@
   "tuning_info": {
     "best_trial": 3,
     "total_trials": 10,
-    "tuning_best_f1": 0.6649420663701356,
-    "validation_f1": 0.43053063357416843
+    "tuning_best_f1": 0.6608452266233511,
+    "validation_f1": 0.42961377392016403
   }
 }

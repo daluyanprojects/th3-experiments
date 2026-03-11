@@ -10,7 +10,7 @@
   "warmup_epochs": 6,
   "ce_weight": 1.0,
   "batch_size": 64,
-  "best_f1": 0.6372205740154882,
+  "best_f1": 0.6578336097695099,
   "best_trial": 3,
   "total_trials": 10
 }

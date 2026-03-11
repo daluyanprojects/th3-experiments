@@ -27,6 +27,8 @@
     ],
     "warmup_epochs": 10,
     "min_lr": 1e-06,
+    "ce_weight": 0.9,
+    "dice_weight": 0.1,
     "output_dir": "checkpoints",
     "output_ped_dir": "checkpoints_ped"
   }

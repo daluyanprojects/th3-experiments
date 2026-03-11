@@ -4,7 +4,7 @@
     {
       "number": 0,
       "state": "TrialState.COMPLETE",
-      "value": 0.5147753838028184,
+      "value": 0.5147687915779088,
       "params": {
         "embed_dim": 256,
         "num_heads": 4,
@@ -22,7 +22,7 @@
     {
       "number": 1,
       "state": "TrialState.COMPLETE",
-      "value": 0.5062920185293176,
+      "value": 0.5033110335873854,
       "params": {
         "embed_dim": 512,
         "num_heads": 4,
@@ -40,7 +40,7 @@
     {
       "number": 2,
       "state": "TrialState.COMPLETE",
-      "value": 0.46738174626740814,
+      "value": 0.5032153701394526,
       "params": {
         "embed_dim": 256,
         "num_heads": 16,
@@ -58,7 +58,7 @@
     {
       "number": 3,
       "state": "TrialState.COMPLETE",
-      "value": 0.6372205740154882,
+      "value": 0.6578336097695099,
       "params": {
         "embed_dim": 384,
         "num_heads": 16,
@@ -76,7 +76,7 @@
     {
       "number": 4,
       "state": "TrialState.PRUNED",
-      "value": 0.43154568803240423,
+      "value": 0.411873518647979,
       "params": {
         "embed_dim": 384,
         "num_heads": 4,
@@ -93,8 +93,8 @@
     },
     {
       "number": 5,
-      "state": "TrialState.COMPLETE",
-      "value": 0.5608964294197989,
+      "state": "TrialState.PRUNED",
+      "value": 0.5394962905418064,
       "params": {
         "embed_dim": 384,
         "num_heads": 8,
@@ -112,7 +112,7 @@
     {
       "number": 6,
       "state": "TrialState.COMPLETE",
-      "value": 0.509059488616693,
+      "value": 0.5115387277177069,
       "params": {
         "embed_dim": 256,
         "num_heads": 4,
@@ -130,7 +130,7 @@
     {
       "number": 7,
       "state": "TrialState.COMPLETE",
-      "value": 0.5317832085300136,
+      "value": 0.5211388523016803,
       "params": {
         "embed_dim": 512,
         "num_heads": 16,
@@ -147,8 +147,8 @@
     },
     {
       "number": 8,
-      "state": "TrialState.COMPLETE",
-      "value": 0.5137651856715759,
+      "state": "TrialState.PRUNED",
+      "value": 0.4364657253350101,
       "params": {
         "embed_dim": 384,
         "num_heads": 16,
@@ -165,8 +165,8 @@
     },
     {
       "number": 9,
-      "state": "TrialState.PRUNED",
-      "value": 0.4658916374510607,
+      "state": "TrialState.COMPLETE",
+      "value": 0.4973164146599508,
       "params": {
         "embed_dim": 512,
         "num_heads": 4,
