@@ -21,7 +21,7 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     batch_size:       int   = 256
-    num_epochs:       int   = 1
+    num_epochs:       int   = 20
     num_folds:        int   = 2
     lr:               float = 3e-4
     weight_decay:     float = 1e-4
@@ -29,6 +29,8 @@ class TrainConfig:
     betas:            tuple = (0.9, 0.999)
     warmup_epochs:    int   = 10
     min_lr:           float = 1e-6
+    ce_weight:        float = 0.9    
+    dice_weight:      float = 0.1 
     output_dir:       Path  = Path('./checkpoints')
     output_ped_dir:   Path  = Path('./checkpoints_ped')
 

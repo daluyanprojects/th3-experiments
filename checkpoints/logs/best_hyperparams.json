@@ -1,0 +1,16 @@
+{
+  "embed_dim": 384,
+  "num_heads": 16,
+  "num_layers": 5,
+  "mlp_ratio": 1.5,
+  "dropout": 0.0,
+  "rainfall_hidden": 32,
+  "lr": 1.4063366777718176e-05,
+  "weight_decay": 5.211124595788268e-05,
+  "warmup_epochs": 6,
+  "ce_weight": 1.0,
+  "batch_size": 64,
+  "best_f1": 0.6372205740154882,
+  "best_trial": 3,
+  "total_trials": 10
+}

@@ -94,7 +94,7 @@ def train_kfold(
     N_scenarios = full_dataset.N_scenarios
 
     class_weights = compute_class_weights(y_train).to(device)
-    criterion     = CombinedLoss(class_weights=class_weights)
+    criterion     = CombinedLoss(class_weights=class_weights, ce_weight=cfg.ce_weight, dice_weight=cfg.dice_weight)
     kf            = KFold(n_splits=cfg.num_folds, shuffle=True, random_state=42)
     patch_indices = np.arange(N_patches)
 

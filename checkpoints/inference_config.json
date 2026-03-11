@@ -1,35 +1,28 @@
 {
-  "model": {
-    "in_channels": 3,
-    "patch_size": 4,
-    "num_classes": 5,
-    "embed_dim": 256,
-    "num_layers": 4,
-    "num_heads": 8,
-    "mlp_ratio": 2.0,
-    "dropout": 0.1,
-    "learnable_pos_enc": true,
-    "rainfall_method": "hybrid",
-    "num_timesteps": 13,
-    "conditioning_dim": 19,
-    "rainfall_hidden": 64
-  },
-  "train": {
-    "batch_size": 256,
-    "num_epochs": 1,
-    "num_folds": 2,
-    "lr": 0.0003,
-    "weight_decay": 0.0001,
-    "num_classes": 5,
-    "betas": [
-      0.9,
-      0.999
-    ],
-    "warmup_epochs": 10,
-    "min_lr": 1e-06,
-    "output_dir": "checkpoints"
-  },
-  "checkpoint_info": {
-    "checkpoint_dir": "./checkpoints"
+  "patch_size": 4,
+  "num_classes": 5,
+  "in_channels": 3,
+  "conditioning_dim": 19,
+  "num_timesteps": 13,
+  "rainfall_method": "hybrid",
+  "embed_dim": 384,
+  "num_heads": 16,
+  "num_layers": 5,
+  "mlp_ratio": 1.5,
+  "dropout": 0.0,
+  "rainfall_hidden": 32,
+  "learnable_pos_enc": true,
+  "lr": 1.4063366777718176e-05,
+  "weight_decay": 5.211124595788268e-05,
+  "warmup_epochs": 6,
+  "ce_weight": 1.0,
+  "batch_size": 64,
+  "best_fold": 1,
+  "checkpoint_dir": "checkpoints",
+  "tuning_info": {
+    "best_trial": 3,
+    "total_trials": 10,
+    "tuning_best_f1": 0.6372205740154882,
+    "validation_f1": 0.4907710114211013
   }
 }

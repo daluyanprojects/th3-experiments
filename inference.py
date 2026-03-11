@@ -1,14 +1,13 @@
+import json
 import numpy as np
 import torch
 from typing import Optional, Dict, List, Tuple
 import matplotlib.patches as mpatches, matplotlib.colors as mcolors
 import rasterio
-import numpy as np, torch, matplotlib.pyplot as plt
-import geopandas as gpd
 import matplotlib.pyplot as plt
+import geopandas as gpd
 from rasterio.features import rasterize
 from shapely.geometry import box
-import matplotlib.pyplot as plt
 from pathlib import Path
 from rasterio.warp import reproject, Resampling
 import warnings
@@ -79,7 +78,6 @@ def validate_storm_input(storm_type: str, depth_mm: float, tpeak: Optional[float
 
     return True, warnings
 
-# ── Inference Engine ──────────────────────────────────────────────────────────
 class FloodInferenceEngine:
     def __init__(
         self,
@@ -91,6 +89,8 @@ class FloodInferenceEngine:
         num_classes:          int,
         batch_size:           int,
         manila_patch_indices: np.ndarray,
+        inference_config_path: Optional[str] = None, 
+        model_checkpoint_path: Optional[str] = None, 
     ):
         self.model       = model
         self.device      = device
@@ -108,23 +108,141 @@ class FloodInferenceEngine:
         self.X_spatial_tensor = (
             torch.from_numpy(X_spatial).float().permute(0, 3, 1, 2)
         )
-        self.n_patches = X_spatial.shape[0]   # N_MANILA or N_H*N_W
+        self.n_patches = X_spatial.shape[0]  
+        self.tuning_metadata = None
+        self.model_hyperparams = None
+        self.checkpoint_info = None
+        
+        if inference_config_path:
+            self._load_and_verify_config(inference_config_path, model_checkpoint_path)
 
+        # Print engine summary
+        self._print_engine_summary()
+
+    def _load_and_verify_config(
+        self, 
+        inference_config_path: str,
+        model_checkpoint_path: Optional[str] = None
+    ) -> None:        
+        config_path = Path(inference_config_path)
+        
+        if not config_path.exists():
+            print(f"⚠ WARNING: inference_config.json not found at {config_path}")
+            return
+        
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            
+            # Extract tuning metadata
+            self.tuning_metadata = cfg.get('tuning_info', {})
+            
+            # Extract model hyperparameters
+            self.model_hyperparams = {
+                'embed_dim': cfg.get('embed_dim'),
+                'num_heads': cfg.get('num_heads'),
+                'num_layers': cfg.get('num_layers'),
+                'mlp_ratio': cfg.get('mlp_ratio'),
+                'dropout': cfg.get('dropout'),
+                'rainfall_hidden': cfg.get('rainfall_hidden'),
+                'lr': cfg.get('lr'),
+                'weight_decay': cfg.get('weight_decay'),
+                'ce_weight': cfg.get('ce_weight'),
+                'batch_size': cfg.get('batch_size'),
+            }
+            
+            # Extract checkpoint info
+            self.checkpoint_info = {
+                'best_fold': cfg.get('best_fold'),
+                'checkpoint_dir': cfg.get('checkpoint_dir'),
+            }
+            
+        except Exception as e:
+            print(f"⚠ WARNING: Could not load inference config: {e}")
+            self.tuning_metadata = None
+            self.model_hyperparams = None
+            return
+
+    def verify_model_is_retrained(self) -> bool:
+        if self.tuning_metadata is None:
+            print("\n⚠ WARNING: No tuning metadata found!")
+            print("  This model may NOT be hyperparameter-optimized.")
+            return False
+        
+        # Check that tuning info is present
+        required_keys = ['best_trial', 'total_trials', 'tuning_best_f1', 'validation_f1']
+        has_all_keys = all(key in self.tuning_metadata for key in required_keys)
+        
+        if not has_all_keys:
+            print("\n⚠ WARNING: Incomplete tuning metadata!")
+            return False
+        
+        print("\n✓ Model verification PASSED:")
+        print("  This is the retrained (hyperparameter-optimized) model")
+        self._print_tuning_summary()
+        return True
+
+    def _print_tuning_summary(self) -> None:
+        if not self.tuning_metadata:
+            return
+        
+        print(f"\n  Tuning Results:")
+        print(f"    Best trial:       {self.tuning_metadata.get('best_trial', 'N/A')}")
+        print(f"    Total trials:     {self.tuning_metadata.get('total_trials', 'N/A')}")
+        print(f"    Tuning F1:        {self.tuning_metadata.get('tuning_best_f1', 'N/A'):.4f}")
+        print(f"    Validation F1:    {self.tuning_metadata.get('validation_f1', 'N/A'):.4f}")
+        
+        if self.checkpoint_info:
+            print(f"\n  Checkpoint Info:")
+            print(f"    Best fold:        {self.checkpoint_info.get('best_fold', 'N/A')}")
+            print(f"    Checkpoint dir:   {self.checkpoint_info.get('checkpoint_dir', 'N/A')}")
+
+    def _print_hyperparameters(self) -> None:
+        if not self.model_hyperparams:
+            return
+        
+        print(f"\n  Hyperparameters (from tuning):")
+        print(f"    embed_dim:        {self.model_hyperparams['embed_dim']}")
+        print(f"    num_heads:        {self.model_hyperparams['num_heads']}")
+        print(f"    num_layers:       {self.model_hyperparams['num_layers']}")
+        print(f"    mlp_ratio:        {self.model_hyperparams['mlp_ratio']:.2f}")
+        print(f"    dropout:          {self.model_hyperparams['dropout']:.4f}")
+        print(f"    rainfall_hidden:  {self.model_hyperparams['rainfall_hidden']}")
+        print(f"    lr:               {self.model_hyperparams['lr']:.6f}")
+        print(f"    weight_decay:     {self.model_hyperparams['weight_decay']:.6f}")
+        print(f"    ce_weight:        {self.model_hyperparams['ce_weight']:.4f}")
+        print(f"    batch_size:       {self.model_hyperparams['batch_size']}")
+
+    def _print_engine_summary(self) -> None:
         print(f"\n{'='*60}")
         print(f"FLOOD INFERENCE ENGINE READY")
         print(f"{'='*60}")
-        print(f"  Device         : {device}")
-        print(f"  Model          : {type(model).__name__}")
+        
+        # Basic info
+        print(f"  Device         : {self.device}")
+        print(f"  Model          : {type(self.model).__name__}")
         print(f"  Spatial patches: {self.n_patches:,} "
               f"{'(Manila mask)' if self.masked_mode else '(full grid)'}")
-        print(f"  Patch shape    : {X_spatial.shape[1:]}")
-        print(f"  Rain range     : [{rain_min:.4f}, {rain_max:.4f}]")
-        print(f"  Num classes    : {num_classes}")
-        print(f"  Batch size     : {batch_size}")
+        print(f"  Patch shape    : {self.X_spatial.shape[1:]}")
+        print(f"  Rain range     : [{self.rain_min:.4f}, {self.rain_max:.4f}]")
+        print(f"  Num classes    : {self.num_classes}")
+        print(f"  Batch size     : {self.batch_size}")
+        
         if self.masked_mode:
-            print(f"  Manila indices : {len(manila_patch_indices):,} patches indexed")
+            print(f"  Manila indices : {len(self.manila_patch_indices):,} patches indexed")
+        
+        # Hyperparameters (if available)
+        if self.model_hyperparams:
+            self._print_hyperparameters()
+        
+        # Tuning info (if available)
+        if self.tuning_metadata:
+            self._print_tuning_summary()
+        else:
+            print(f"\n⚠ No tuning metadata loaded")
+            print(f"  Set inference_config_path to verify model is hyperparameter-optimized")
+        
         print(f"{'='*60}\n")
-
 
     @torch.no_grad()
     def predict(
@@ -519,7 +637,6 @@ def visualize_result_tif(tif_path, save_path=None, figsize=(21, 6)):
                  for i in range(5)],
         loc='lower left', fontsize=7, framealpha=0.85,
         title='Flood Class', title_fontsize=7)
-    # ── EDITED: Use valid_band1_2 for band1 stats (not valid_band3) ──
     total = int(np.sum(valid_band1_2))
     ax1.text(0.98, 0.98,
              '\n'.join([f"C{i} {FLOOD_LABELS[i]}: {100*np.nansum(band1==i)/total:.1f}%" for i in range(5)]),
@@ -700,95 +817,6 @@ def _plot_confidence_map(ax_conf, ax_hist, conf_disp, conf_map, patch_confs, fra
     ax_hist.set_title('Confidence\nDistribution', fontsize=8.5, fontweight='bold', pad=8)
     ax_hist.tick_params(labelsize=7);  ax_hist.legend(fontsize=6.5, loc='upper left')
     ax_hist.spines['top'].set_visible(False);  ax_hist.spines['right'].set_visible(False)
-
-def run_and_export(
-    results:          List[Dict],
-    test_configs:     List[Dict],
-    output_dir,                       
-    N_H:              int,
-    N_W:              int,
-    manila_patch_indices: np.ndarray,
-    dem_transform,
-    dem_crs,
-    flood_cmap,
-    flood_norm,
-    legend_patches:   list,
-    barangay_band:    Optional[np.ndarray] = None,
-    prefix:           str = 'web',
-    dpi:              int = 150,
-) -> None:
-
-
-    output_dir = Path(output_dir)
-
-    # ── Build Manila mask once ────────────────────────────────────────────────
-    manila_mask      = np.zeros(N_H * N_W, dtype=bool)
-    manila_mask[manila_patch_indices] = True
-    manila_mask_2d   = manila_mask.reshape(N_H, N_W)
-
-    rows, cols = np.where(manila_mask_2d)
-    r0 = int(rows.min());  r1 = int(rows.max())
-    c0 = int(cols.min());  c1 = int(cols.max())
-
-    # ── Per-config loop ───────────────────────────────────────────────────────
-    for i, (result, config) in enumerate(zip(results, test_configs), start=1):
-        cfg_label = f"Config {i}: {config['storm_type'].title()} | {config['depth_mm']} mm"
-
-        if 'error' in result:
-            print(f"\n{cfg_label}: ERROR — {result['error']}")
-            continue
-
-        flood_map   = result['flood_map'].astype(np.float32)
-        conf_map    = result['conf_map'].astype(np.float32)
-        patch_confs = result['patch_confidences']
-        pcts        = compute_class_pcts(flood_map)
-        frac_low    = float((patch_confs < 0.5).mean() * 100)
-        subtitle    = build_subtitle(config)
-        flood_disp  = np.where(manila_mask_2d, flood_map, np.nan)
-        conf_disp   = np.where(manila_mask_2d, conf_map,  np.nan)
-
-        # Figure 1 — Flood Map ────────────────────────────────────────────────
-        fig1, (ax_flood, ax_bar) = plt.subplots(
-            1, 2, figsize=(15, 7),
-            gridspec_kw={'width_ratios': [2.5, 1], 'wspace': 0.30},
-        )
-        _plot_flood_map(ax_flood, ax_bar, flood_disp, pcts,
-                        cfg_label, subtitle, N_H, N_W,
-                        r0, r1, c0, c1,
-                        flood_cmap, flood_norm, legend_patches, fig1)
-        plt.savefig(output_dir / f'{prefix}_config{i}_flood_map.png',
-                    dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.show();  plt.close(fig1)
-
-        # Figure 2 — Confidence Map ───────────────────────────────────────────
-        fig2, (ax_conf, ax_hist) = plt.subplots(
-            1, 2, figsize=(15, 7),
-            gridspec_kw={'width_ratios': [2.5, 1], 'wspace': 0.35},
-        )
-        _plot_confidence_map(ax_conf, ax_hist, conf_disp, conf_map,
-                             patch_confs, frac_low,
-                             cfg_label, subtitle, N_H, N_W,
-                             r0, r1, c0, c1, manila_mask_2d, fig2)
-        plt.savefig(output_dir / f'{prefix}_config{i}_confidence_map.png',
-                    dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.show();  plt.close(fig2)
-
-        # GeoTIFF export ──────────────────────────────────────────────────────
-        tif_out = str(output_dir / f'{prefix}_config{i}_result.tif')
-        save_result_as_tif(
-            flood_map=flood_map, conf_map=conf_map,
-            barangay_band=barangay_band, config=config,
-            save_path=tif_out, transform=dem_transform,
-            crs=dem_crs, mask_2d=manila_mask_2d,
-        )
-
-        # TIF band visualization ───────────────────────────────────────────────
-        visualize_result_tif(
-            tif_path  = tif_out,
-            save_path = str(output_dir / f'{prefix}_config{i}_tif_bands.png'),
-        )
-
-    print("\n✓ All configurations processed.")
 
 def run_inference(
     engine: FloodInferenceEngine,
