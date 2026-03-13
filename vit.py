@@ -231,9 +231,7 @@ class ViTFloodClassifier(nn.Module):
                     device=spatial_patch.device, dtype=spatial_patch.dtype,
                 )
             cond_token = self.conditioning_encoder(conditioning)  # (batch, 1, embed_dim)
-            tokens = torch.cat([rain_token, patch_token, cond_token], dim=1)  # (batch, 3, embed_dim)
-        else:
-            tokens = torch.cat([rain_token, patch_token], dim=1)  # (batch, 2, embed_dim)
+            tokens = torch.cat([patch_token, rain_token, cond_token], dim=1)  # (batch, 3, embed_dim)
 
         tokens  = self.pos_encoding(tokens)
         encoded, attn_maps = self.transformer(tokens, return_attention=return_attention)

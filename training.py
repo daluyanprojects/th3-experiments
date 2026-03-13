@@ -161,36 +161,59 @@ def build_criterion(cfg: TrainConfig, class_weights: torch.Tensor) -> nn.Module:
 
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
+    cm = confusion_matrix(y_true, y_pred)
+
+    # per-class IoU from confusion matrix
+    iou_per_class = []
+    for c in range(cm.shape[0]):
+        tp    = cm[c, c]
+        fp    = cm[:, c].sum() - tp
+        fn    = cm[c, :].sum() - tp
+        denom = tp + fp + fn
+        iou_per_class.append(float(tp / denom) if denom > 0 else 0.0)
+
     m = {
-        'accuracy'   : accuracy_score(y_true, y_pred),
-        'macro_f1'   : f1_score(y_true, y_pred, average='macro'),
-        'weighted_f1': f1_score(y_true, y_pred, average='weighted'),
+        'accuracy'        : accuracy_score(y_true, y_pred),
+        'macro_f1'        : f1_score(y_true, y_pred, average='macro',     zero_division=0),
+        'weighted_f1'     : f1_score(y_true, y_pred, average='weighted',  zero_division=0),
+        'macro_precision' : precision_score(y_true, y_pred, average='macro', zero_division=0),
+        'macro_recall'    : recall_score(y_true, y_pred, average='macro',    zero_division=0),
+        'macro_iou'       : float(np.mean(iou_per_class)),
+        'iou_per_class'   : iou_per_class,
     }
+
     prec = precision_score(y_true, y_pred, average=None, zero_division=0)
     rec  = recall_score(y_true, y_pred, average=None, zero_division=0)
     f1   = f1_score(y_true, y_pred, average=None, zero_division=0)
     for i, n in enumerate(CLASS_NAMES):
-        m[f'precision_{n}'] = prec[i]
-        m[f'recall_{n}']    = rec[i]
-        m[f'f1_{n}']        = f1[i]
+        m[f'precision_{n}'] = float(prec[i])
+        m[f'recall_{n}']    = float(rec[i])
+        m[f'f1_{n}']        = float(f1[i])
+        m[f'iou_{n}']       = iou_per_class[i]
+
     crit = y_true >= 3
     if crit.sum() > 0:
         m['critical_recall'] = float(recall_score(y_true[crit] >= 3, y_pred[crit] >= 3))
-    m['confusion_matrix'] = confusion_matrix(y_true, y_pred)
+
+    m['confusion_matrix'] = cm
     return m
 
 
 def print_metrics(m: Dict, split: str = 'Validation'):
     print(f"\n{'='*60}\n{split} Metrics\n{'='*60}")
-    print(f"  Accuracy     : {m['accuracy']:.4f}")
-    print(f"  Macro F1     : {m['macro_f1']:.4f}")
-    print(f"  Weighted F1  : {m['weighted_f1']:.4f}")
+    print(f"  Accuracy         : {m['accuracy']:.4f}")
+    print(f"  Macro F1         : {m['macro_f1']:.4f}")
+    print(f"  Weighted F1      : {m['weighted_f1']:.4f}")
+    print(f"  Macro Precision  : {m['macro_precision']:.4f}")
+    print(f"  Macro Recall     : {m['macro_recall']:.4f}")
+    print(f"  Macro IoU        : {m['macro_iou']:.4f}")
     if 'critical_recall' in m:
         print(f"  Critical Recall (Heavy+Extreme): {m['critical_recall']:.4f}")
-    print(f"\n  {'Class':<12} {'Prec':>8} {'Rec':>8} {'F1':>8}")
-    print(f"  {'-'*38}")
+    print(f"\n  {'Class':<12} {'Prec':>8} {'Rec':>8} {'F1':>8} {'IoU':>8}")
+    print(f"  {'-'*48}")
     for n in CLASS_NAMES:
-        print(f"  {n:<12} {m[f'precision_{n}']:>8.4f} {m[f'recall_{n}']:>8.4f} {m[f'f1_{n}']:>8.4f}")
+        print(f"  {n:<12} {m[f'precision_{n}']:>8.4f} {m[f'recall_{n}']:>8.4f} "
+              f"{m[f'f1_{n}']:>8.4f} {m[f'iou_{n}']:>8.4f}")
 
 
 def run_epoch(
@@ -255,13 +278,26 @@ def run_epoch(
                 print(f"    [{tag}] {i+1:>5}/{n_batches}  "
                       f"loss={total_loss/total:.4f}  acc={correct/total:.4f}")
 
-    avg_loss = total_loss / total
-    avg_acc  = correct / total
-    macro_f1 = None
-    if not is_train:
-        macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    avg_loss        = total_loss / total
+    avg_acc         = correct / total
+    macro_f1        = None
+    macro_precision = None
+    macro_recall    = None
+    macro_iou       = None
 
-    return avg_loss, avg_acc, macro_f1
+    if not is_train:
+        macro_f1        = f1_score(all_labels, all_preds, average='macro',    zero_division=0)
+        macro_precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+        macro_recall    = recall_score(all_labels, all_preds, average='macro',    zero_division=0)
+        _cm = confusion_matrix(all_labels, all_preds)
+        _ious = []
+        for _c in range(_cm.shape[0]):
+            _tp = _cm[_c, _c]; _fp = _cm[:, _c].sum() - _tp; _fn = _cm[_c, :].sum() - _tp
+            _denom = _tp + _fp + _fn
+            _ious.append(float(_tp / _denom) if _denom > 0 else 0.0)
+        macro_iou = float(np.mean(_ious))
+
+    return avg_loss, avg_acc, macro_f1, macro_precision, macro_recall, macro_iou
 
 
 def train_kfold(
@@ -318,8 +354,8 @@ def train_kfold(
 
         for epoch in range(cfg.num_epochs):
             t0 = time.time()
-            tr_loss, tr_acc, _     = run_epoch(model, train_loader, criterion, cfg, optimizer, scaler, is_train=True)
-            vl_loss, vl_acc, vl_f1 = run_epoch(model, val_loader,  criterion, cfg, is_train=False)
+            tr_loss, tr_acc, _, _, _, _                      = run_epoch(model, train_loader, criterion, cfg, optimizer, scaler, is_train=True)
+            vl_loss, vl_acc, vl_f1, vl_prec, vl_rec, vl_iou  = run_epoch(model, val_loader,  criterion, cfg, is_train=False)
             lr = scheduler.step()
 
             history['train_loss'].append(tr_loss)
@@ -327,11 +363,15 @@ def train_kfold(
             history['val_loss'].append(vl_loss)
             history['val_acc'].append(vl_acc)
             history['val_f1'].append(vl_f1)
-            history['lr'].append(lr)
+            history['val_precision'].append(vl_prec)
+            history['val_recall'].append(vl_rec)
+            history['val_iou'].append(vl_iou)
 
             print(f"  Epoch {epoch+1:2d}/{cfg.num_epochs} ({time.time()-t0:.0f}s)  "
                   f"lr={lr:.2e}  train loss={tr_loss:.4f}  acc={tr_acc:.4f}  "
-                  f"val loss={vl_loss:.4f}  acc={vl_acc:.4f}  macro_f1={vl_f1:.4f}")
+                  f"val loss={vl_loss:.4f}  acc={vl_acc:.4f}  f1={vl_f1:.4f}  "
+                  f"prec={vl_prec:.4f}  rec={vl_rec:.4f}  iou={vl_iou:.4f}")
+
 
             monitor = vl_f1 if cfg.checkpoint_metric == 'macro_f1' else vl_acc
             if monitor > best_fold_monitor:
